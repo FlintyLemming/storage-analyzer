@@ -270,8 +270,9 @@ async def get_overview():
             'message': 'No scans completed yet. Run a scan to see data.'
         }
 
-    # Get top-level directories
-    top_entries = await db.get_entries(latest['id'], depth=1)
+    # Get top-level directories (children of mount point)
+    mount_point = latest.get('mount_point', '/')
+    top_entries = await db.get_entries(latest['id'], parent_path=mount_point)
 
     # Get growth data
     growth = await db.get_top_growth(10)
@@ -303,7 +304,7 @@ async def get_overview():
 @app.post("/api/scan")
 async def trigger_scan(request: ScanRequest = None):
     """Trigger a manual scan."""
-    if scheduler.is_scan_running():
+    if await scheduler.is_scan_running():
         raise HTTPException(409, "A scan is already in progress")
 
     mount_points = request.mount_points if request else None
@@ -317,16 +318,18 @@ async def trigger_scan(request: ScanRequest = None):
 async def _run_scan_task(mount_points: list[str] = None):
     """Background scan task."""
     try:
+        logger.info("Background scan task started")
         await broadcast_status('scan_started', {
             'timestamp': datetime.now().isoformat()
         })
         results = await scheduler.trigger_scan(mount_points)
+        logger.info(f"Background scan task completed, broadcasting completion")
         await broadcast_status('scan_completed', {
-            'timestamp': datetime.now().isoformat(),
-            'results': results
+            'timestamp': datetime.now().isoformat()
         })
+        logger.info("Scan completion broadcast sent")
     except Exception as e:
-        logger.exception(f"Scan failed: {e}")
+        logger.exception(f"Scan task failed: {e}")
         await broadcast_status('scan_failed', {
             'timestamp': datetime.now().isoformat(),
             'error': str(e)

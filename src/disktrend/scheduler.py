@@ -147,6 +147,7 @@ class ScanScheduler:
             return job.next_run_time
         return None
 
-    def is_scan_running(self) -> bool:
+    async def is_scan_running(self) -> bool:
         """Check if a scan is currently running."""
-        return self._scan_task is not None and not self._scan_task.done()
+        running = await self.db.get_running_snapshot()
+        return running is not None
