@@ -1,0 +1,49 @@
+# DiskTrend Web Configuration
+
+# Web server settings
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+# Database settings
+database:
+  path: "./data/disktrend.db"
+
+# Scanner settings
+scanner:
+  # Mount points to scan (use "/" for full system scan)
+  mount_points:
+    - "/"
+
+  # Directories to skip (virtual filesystems, etc.)
+  skip_paths:
+    - "/proc"
+    - "/sys"
+    - "/dev"
+    - "/run"
+    - "/snap"
+    - "/var/snap"
+    - "/tmp"
+    - "/var/tmp"
+    - "/mnt"
+    - "/media"
+    - "/lost+found"
+
+  # Maximum depth to scan (0 = unlimited)
+  max_depth: 0
+
+  # Timeout for scanning a single directory (seconds)
+  dir_timeout: 30
+
+# Scheduler settings
+scheduler:
+  enabled: true
+  # Scan time in 24-hour format (HH:MM)
+  scan_time: "03:00"
+  # Timezone
+  timezone: "Asia/Shanghai"
+
+# Data retention settings
+retention:
+  # Keep snapshots for N days (0 = keep forever)
+  days: 365

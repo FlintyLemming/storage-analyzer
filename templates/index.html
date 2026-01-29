@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DiskTrend Web - 存储分析器</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --border-color: #30363d;
+            --accent-blue: #58a6ff;
+            --accent-green: #3fb950;
+            --accent-red: #f85149;
+            --accent-yellow: #d29922;
+            --accent-purple: #a371f7;
+        }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.5;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--accent-blue);
+        }
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            font-size: 0.875rem;
+        }
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-green);
+        }
+        .status-dot.scanning {
+            background: var(--accent-yellow);
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: var(--accent-blue);
+            color: #fff;
+        }
+        .btn-primary:hover {
+            background: #4c9aed;
+        }
+        .btn-primary:disabled {
+            background: var(--bg-tertiary);
+            cursor: not-allowed;
+        }
+        .tabs {
+            display: flex;
+            gap: 4px;
+            padding: 16px 20px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+        }
+        .tab {
+            padding: 8px 16px;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+        .tab:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+        .tab.active {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+        .panel {
+            display: none;
+            padding: 20px;
+        }
+        .panel.active {
+            display: block;
+        }
+        .grid {
+            display: grid;
+            gap: 20px;
+        }
+        .grid-2 {
+            grid-template-columns: repeat(2, 1fr);
+        }
+        .grid-3 {
+            grid-template-columns: repeat(3, 1fr);
+        }
+        @media (max-width: 1024px) {
+            .grid-2, .grid-3 {
+                grid-template-columns: 1fr;
+            }
+        }
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .card-header {
+            padding: 16px;
+            border-bottom: 1px solid var(--border-color);
+            font-weight: 600;
+        }
+        .card-body {
+            padding: 16px;
+        }
+        .chart {
+            width: 100%;
+            height: 300px;
+        }
+        .chart-large {
+            height: 400px;
+        }
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+        @media (max-width: 768px) {
+            .stat-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+        .stat-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px;
+        }
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-top: 4px;
+        }
+        .stat-sub {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+        .growth-list {
+            list-style: none;
+        }
+        .growth-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .growth-item:last-child {
+            border-bottom: none;
+        }
+        .growth-path {
+            font-family: monospace;
+            font-size: 0.875rem;
+            color: var(--text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 60%;
+        }
+        .growth-value {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .growth-size {
+            font-weight: 500;
+        }
+        .growth-badge {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        .growth-badge.up {
+            background: rgba(248, 81, 73, 0.2);
+            color: var(--accent-red);
+        }
+        .browser {
+            font-family: monospace;
+            font-size: 0.875rem;
+        }
+        .browser-breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 12px 16px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            overflow-x: auto;
+        }
+        .breadcrumb-item {
+            color: var(--accent-blue);
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .breadcrumb-item:hover {
+            text-decoration: underline;
+        }
+        .breadcrumb-sep {
+            color: var(--text-secondary);
+        }
+        .browser-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .browser-table th,
+        .browser-table td {
+            padding: 10px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .browser-table th {
+            background: var(--bg-tertiary);
+            font-weight: 500;
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+        }
+        .browser-table tr:hover {
+            background: var(--bg-tertiary);
+        }
+        .browser-table .name {
+            cursor: pointer;
+            color: var(--accent-blue);
+        }
+        .browser-table .name:hover {
+            text-decoration: underline;
+        }
+        .browser-table .size {
+            text-align: right;
+            white-space: nowrap;
+        }
+        .browser-table .bar {
+            width: 120px;
+        }
+        .size-bar {
+            height: 6px;
+            background: var(--bg-tertiary);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .size-bar-fill {
+            height: 100%;
+            background: var(--accent-blue);
+            border-radius: 3px;
+        }
+        .trend-controls {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .trend-input {
+            flex: 1;
+            padding: 8px 12px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-family: monospace;
+            font-size: 0.875rem;
+        }
+        .trend-input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+        .period-select {
+            padding: 8px 12px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+        }
+        .no-data {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-secondary);
+        }
+        .no-data h3 {
+            margin-bottom: 8px;
+            color: var(--text-primary);
+        }
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+        .spinner {
+            width: 24px;
+            height: 24px;
+            border: 2px solid var(--border-color);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 12px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            z-index: 1000;
+            animation: slideIn 0.3s ease;
+        }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo">DiskTrend Web</div>
+        <div class="status-bar">
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">已连接</span>
+            </div>
+            <span id="nextScan">下次扫描: --</span>
+            <button class="btn btn-primary" id="scanBtn" onclick="triggerScan()">开始扫描</button>
+        </div>
+    </header>
+
+    <div class="tabs">
+        <button class="tab active" onclick="switchTab('overview')">总览</button>
+        <button class="tab" onclick="switchTab('trend')">趋势分析</button>
+        <button class="tab" onclick="switchTab('browser')">文件浏览器</button>
+        <button class="tab" onclick="switchTab('alerts')">异常告警</button>
+    </div>
+
+    <!-- Overview Panel -->
+    <div class="panel active" id="panel-overview">
+        <div class="container">
+            <div class="stat-grid" id="statGrid">
+                <div class="stat-card">
+                    <div class="stat-label">磁盘使用</div>
+                    <div class="stat-value" id="diskUsage">--</div>
+                    <div class="stat-sub" id="diskDetail">-- / --</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">已扫描目录</div>
+                    <div class="stat-value" id="totalDirs">--</div>
+                    <div class="stat-sub">目录</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">已扫描文件</div>
+                    <div class="stat-value" id="totalFiles">--</div>
+                    <div class="stat-sub">文件</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">最近扫描</div>
+                    <div class="stat-value" id="lastScan">--</div>
+                    <div class="stat-sub" id="scanDuration">--</div>
+                </div>
+            </div>
+
+            <div class="grid grid-2">
+                <div class="card">
+                    <div class="card-header">磁盘占用分布</div>
+                    <div class="card-body">
+                        <div class="chart" id="pieChart"></div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">最近7天存储变化</div>
+                    <div class="card-body">
+                        <div class="chart" id="weekChart"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trend Panel -->
+    <div class="panel" id="panel-trend">
+        <div class="container">
+            <div class="card">
+                <div class="card-header">路径趋势分析</div>
+                <div class="card-body">
+                    <div class="trend-controls">
+                        <input type="text" class="trend-input" id="trendPath" placeholder="输入要分析的路径，如 /home" value="/">
+                        <select class="period-select" id="trendPeriod">
+                            <option value="7">最近 7 天</option>
+                            <option value="30" selected>最近 30 天</option>
+                            <option value="90">最近 90 天</option>
+                        </select>
+                        <button class="btn btn-primary" onclick="loadTrend()">分析</button>
+                    </div>
+                    <div class="chart chart-large" id="trendChart"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Browser Panel -->
+    <div class="panel" id="panel-browser">
+        <div class="container">
+            <div class="card">
+                <div class="browser-breadcrumb" id="breadcrumb"></div>
+                <table class="browser-table">
+                    <thead>
+                        <tr>
+                            <th>名称</th>
+                            <th class="size">大小</th>
+                            <th class="bar">占比</th>
+                            <th class="size">文件数</th>
+                            <th class="size">目录数</th>
+                        </tr>
+                    </thead>
+                    <tbody id="browserBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Alerts Panel -->
+    <div class="panel" id="panel-alerts">
+        <div class="container">
+            <div class="card">
+                <div class="card-header">增长最快的目录 (相比上次扫描)</div>
+                <div class="card-body">
+                    <ul class="growth-list" id="growthList"></ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let currentPath = '/';
+        let currentSnapshot = null;
+        let ws = null;
+        let charts = {};
+
+        // Utilities
+        function formatSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(1024));
+            return (bytes / Math.pow(1024, i)).toFixed(2) + ' ' + units[i];
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return '--';
+            const d = new Date(dateStr);
+            return d.toLocaleString('zh-CN');
+        }
+
+        function formatRelativeTime(dateStr) {
+            if (!dateStr) return '--';
+            const d = new Date(dateStr);
+            const now = new Date();
+            const diff = now - d;
+            const mins = Math.floor(diff / 60000);
+            const hours = Math.floor(diff / 3600000);
+            const days = Math.floor(diff / 86400000);
+            if (mins < 1) return '刚刚';
+            if (mins < 60) return `${mins} 分钟前`;
+            if (hours < 24) return `${hours} 小时前`;
+            return `${days} 天前`;
+        }
+
+        // API calls
+        async function api(endpoint) {
+            const res = await fetch('/api/' + endpoint);
+            if (!res.ok) throw new Error(`API error: ${res.status}`);
+            return res.json();
+        }
+
+        async function apiPost(endpoint, data = {}) {
+            const res = await fetch('/api/' + endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            if (!res.ok) throw new Error(`API error: ${res.status}`);
+            return res.json();
+        }
+
+        // WebSocket
+        function connectWebSocket() {
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+            ws.onopen = () => {
+                document.getElementById('statusDot').classList.remove('scanning');
+                document.getElementById('statusText').textContent = '已连接';
+            };
+
+            ws.onclose = () => {
+                document.getElementById('statusText').textContent = '已断开';
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onmessage = (e) => {
+                const msg = JSON.parse(e.data);
+                handleWebSocketMessage(msg);
+            };
+
+            // Ping every 30s to keep alive
+            setInterval(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send('ping');
+                }
+            }, 30000);
+        }
+
+        function handleWebSocketMessage(msg) {
+            switch (msg.event) {
+                case 'scan_started':
+                    document.getElementById('statusDot').classList.add('scanning');
+                    document.getElementById('statusText').textContent = '扫描中...';
+                    document.getElementById('scanBtn').disabled = true;
+                    showToast('扫描已开始');
+                    break;
+                case 'scan_progress':
+                    document.getElementById('statusText').textContent =
+                        `扫描中: ${msg.data.dirs_scanned || 0} 目录`;
+                    break;
+                case 'scan_completed':
+                    document.getElementById('statusDot').classList.remove('scanning');
+                    document.getElementById('statusText').textContent = '已连接';
+                    document.getElementById('scanBtn').disabled = false;
+                    showToast('扫描完成');
+                    loadOverview();
+                    break;
+                case 'scan_failed':
+                    document.getElementById('statusDot').classList.remove('scanning');
+                    document.getElementById('statusText').textContent = '已连接';
+                    document.getElementById('scanBtn').disabled = false;
+                    showToast('扫描失败: ' + (msg.data.error || '未知错误'));
+                    break;
+            }
+        }
+
+        function showToast(message) {
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        // Tab switching
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+
+            document.querySelector(`.tab[onclick="switchTab('${tabId}')"]`).classList.add('active');
+            document.getElementById('panel-' + tabId).classList.add('active');
+
+            // Load tab-specific data
+            switch (tabId) {
+                case 'overview': loadOverview(); break;
+                case 'trend': initTrendChart(); break;
+                case 'browser': browsePath('/'); break;
+                case 'alerts': loadAlerts(); break;
+            }
+        }
+
+        // Overview
+        async function loadOverview() {
+            try {
+                const data = await api('overview');
+
+                if (!data.has_data) {
+                    document.getElementById('statGrid').innerHTML = `
+                        <div class="stat-card" style="grid-column: span 4;">
+                            <div class="no-data">
+                                <h3>暂无数据</h3>
+                                <p>点击"开始扫描"按钮进行首次扫描</p>
+                            </div>
+                        </div>
+                    `;
+                    return;
+                }
+
+                // Update stats
+                if (data.disk_usage && data.disk_usage.length > 0) {
+                    const disk = data.disk_usage[0];
+                    document.getElementById('diskUsage').textContent = disk.percent + '%';
+                    document.getElementById('diskDetail').textContent =
+                        `${formatSize(disk.used)} / ${formatSize(disk.total)}`;
+                }
+
+                if (data.snapshot) {
+                    document.getElementById('totalDirs').textContent =
+                        (data.snapshot.total_dirs || 0).toLocaleString();
+                    document.getElementById('totalFiles').textContent =
+                        (data.snapshot.total_files || 0).toLocaleString();
+                    document.getElementById('lastScan').textContent =
+                        formatRelativeTime(data.snapshot.completed_at);
+                    currentSnapshot = data.snapshot.id;
+                }
+
+                // Pie chart
+                renderPieChart(data.top_directories || []);
+
+                // Week trend
+                loadWeekTrend();
+
+            } catch (e) {
+                console.error('Failed to load overview:', e);
+            }
+        }
+
+        function renderPieChart(directories) {
+            if (!charts.pie) {
+                charts.pie = echarts.init(document.getElementById('pieChart'));
+            }
+
+            const chartData = directories.slice(0, 10).map(d => ({
+                name: d.name,
+                value: d.size
+            }));
+
+            const option = {
+                backgroundColor: 'transparent',
+                tooltip: {
+                    trigger: 'item',
+                    formatter: (p) => `${p.name}<br/>${formatSize(p.value)} (${p.percent}%)`
+                },
+                legend: {
+                    type: 'scroll',
+                    orient: 'vertical',
+                    right: 10,
+                    top: 20,
+                    bottom: 20,
+                    textStyle: { color: '#8b949e' }
+                },
+                series: [{
+                    type: 'pie',
+                    radius: ['40%', '70%'],
+                    center: ['35%', '50%'],
+                    avoidLabelOverlap: false,
+                    itemStyle: {
+                        borderRadius: 4,
+                        borderColor: '#161b22',
+                        borderWidth: 2
+                    },
+                    label: { show: false },
+                    emphasis: {
+                        label: {
+                            show: true,
+                            fontSize: 14,
+                            fontWeight: 'bold'
+                        }
+                    },
+                    data: chartData
+                }]
+            };
+
+            charts.pie.setOption(option);
+        }
+
+        async function loadWeekTrend() {
+            try {
+                const data = await api('history?path=/&days=7');
+                renderWeekChart(data.history || []);
+            } catch (e) {
+                console.error('Failed to load week trend:', e);
+            }
+        }
+
+        function renderWeekChart(history) {
+            if (!charts.week) {
+                charts.week = echarts.init(document.getElementById('weekChart'));
+            }
+
+            const dates = history.map(h => h.completed_at.split('T')[0]);
+            const sizes = history.map(h => h.size);
+
+            const option = {
+                backgroundColor: 'transparent',
+                tooltip: {
+                    trigger: 'axis',
+                    formatter: (p) => `${p[0].axisValue}<br/>总大小: ${formatSize(p[0].value)}`
+                },
+                grid: {
+                    left: '3%',
+                    right: '4%',
+                    bottom: '3%',
+                    containLabel: true
+                },
+                xAxis: {
+                    type: 'category',
+                    boundaryGap: false,
+                    data: dates,
+                    axisLine: { lineStyle: { color: '#30363d' } },
+                    axisLabel: { color: '#8b949e' }
+                },
+                yAxis: {
+                    type: 'value',
+                    axisLine: { lineStyle: { color: '#30363d' } },
+                    axisLabel: {
+                        color: '#8b949e',
+                        formatter: (v) => formatSize(v)
+                    },
+                    splitLine: { lineStyle: { color: '#21262d' } }
+                },
+                series: [{
+                    type: 'line',
+                    smooth: true,
+                    symbol: 'circle',
+                    symbolSize: 8,
+                    lineStyle: { color: '#58a6ff', width: 2 },
+                    itemStyle: { color: '#58a6ff' },
+                    areaStyle: {
+                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: 'rgba(88, 166, 255, 0.3)' },
+                            { offset: 1, color: 'rgba(88, 166, 255, 0.05)' }
+                        ])
+                    },
+                    data: sizes
+                }]
+            };
+
+            charts.week.setOption(option);
+        }
+
+        // Trend Analysis
+        function initTrendChart() {
+            if (!charts.trend) {
+                charts.trend = echarts.init(document.getElementById('trendChart'));
+            }
+        }
+
+        async function loadTrend() {
+            const path = document.getElementById('trendPath').value || '/';
+            const days = document.getElementById('trendPeriod').value;
+
+            try {
+                const data = await api(`history?path=${encodeURIComponent(path)}&days=${days}`);
+                renderTrendChart(data.history || [], path);
+            } catch (e) {
+                showToast('无法加载趋势数据');
+            }
+        }
+
+        function renderTrendChart(history, path) {
+            initTrendChart();
+
+            if (history.length === 0) {
+                charts.trend.setOption({
+                    title: {
+                        text: '暂无数据',
+                        left: 'center',
+                        top: 'center',
+                        textStyle: { color: '#8b949e' }
+                    }
+                });
+                return;
+            }
+
+            const dates = history.map(h => h.completed_at.split('T')[0]);
+            const sizes = history.map(h => h.size);
+            const files = history.map(h => h.file_count);
+
+            const option = {
+                backgroundColor: 'transparent',
+                title: {
+                    text: `路径: ${path}`,
+                    left: 'center',
+                    textStyle: { color: '#e6edf3', fontSize: 14 }
+                },
+                tooltip: {
+                    trigger: 'axis',
+                    formatter: (params) => {
+                        let html = params[0].axisValue + '<br/>';
+                        params.forEach(p => {
+                            const val = p.seriesName === '大小' ? formatSize(p.value) : p.value.toLocaleString();
+                            html += `${p.marker} ${p.seriesName}: ${val}<br/>`;
+                        });
+                        return html;
+                    }
+                },
+                legend: {
+                    data: ['大小', '文件数'],
+                    top: 30,
+                    textStyle: { color: '#8b949e' }
+                },
+                grid: {
+                    left: '3%',
+                    right: '4%',
+                    bottom: '3%',
+                    top: 80,
+                    containLabel: true
+                },
+                xAxis: {
+                    type: 'category',
+                    boundaryGap: false,
+                    data: dates,
+                    axisLine: { lineStyle: { color: '#30363d' } },
+                    axisLabel: { color: '#8b949e' }
+                },
+                yAxis: [
+                    {
+                        type: 'value',
+                        name: '大小',
+                        axisLine: { lineStyle: { color: '#30363d' } },
+                        axisLabel: {
+                            color: '#8b949e',
+                            formatter: (v) => formatSize(v)
+                        },
+                        splitLine: { lineStyle: { color: '#21262d' } }
+                    },
+                    {
+                        type: 'value',
+                        name: '文件数',
+                        axisLine: { lineStyle: { color: '#30363d' } },
+                        axisLabel: { color: '#8b949e' },
+                        splitLine: { show: false }
+                    }
+                ],
+                series: [
+                    {
+                        name: '大小',
+                        type: 'line',
+                        smooth: true,
+                        yAxisIndex: 0,
+                        lineStyle: { color: '#58a6ff', width: 2 },
+                        itemStyle: { color: '#58a6ff' },
+                        areaStyle: {
+                            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                                { offset: 0, color: 'rgba(88, 166, 255, 0.3)' },
+                                { offset: 1, color: 'rgba(88, 166, 255, 0.05)' }
+                            ])
+                        },
+                        data: sizes
+                    },
+                    {
+                        name: '文件数',
+                        type: 'line',
+                        smooth: true,
+                        yAxisIndex: 1,
+                        lineStyle: { color: '#3fb950', width: 2 },
+                        itemStyle: { color: '#3fb950' },
+                        data: files
+                    }
+                ]
+            };
+
+            charts.trend.setOption(option);
+        }
+
+        // File Browser
+        async function browsePath(path) {
+            currentPath = path;
+            try {
+                const data = await api(`browse?path=${encodeURIComponent(path)}`);
+                renderBreadcrumb(path);
+                renderBrowser(data.children || [], data.current);
+            } catch (e) {
+                showToast('无法加载目录');
+            }
+        }
+
+        function renderBreadcrumb(path) {
+            const parts = path.split('/').filter(Boolean);
+            let html = '<span class="breadcrumb-item" onclick="browsePath(\'/\')">/</span>';
+            let currentPath = '';
+
+            parts.forEach((part, i) => {
+                currentPath += '/' + part;
+                const p = currentPath;
+                html += `<span class="breadcrumb-sep">/</span>`;
+                html += `<span class="breadcrumb-item" onclick="browsePath('${p}')">${part}</span>`;
+            });
+
+            document.getElementById('breadcrumb').innerHTML = html;
+        }
+
+        function renderBrowser(entries, current) {
+            const tbody = document.getElementById('browserBody');
+            const maxSize = entries.length > 0 ? Math.max(...entries.map(e => e.size)) : 1;
+
+            if (entries.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#8b949e;padding:40px;">目录为空或无子目录</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = entries.map(entry => {
+                const percent = (entry.size / maxSize * 100).toFixed(1);
+                const isDir = entry.is_dir;
+                return `
+                    <tr>
+                        <td>
+                            ${isDir ?
+                                `<span class="name" onclick="browsePath('${entry.path}')">${entry.name}/</span>` :
+                                `<span>${entry.name}</span>`
+                            }
+                        </td>
+                        <td class="size">${formatSize(entry.size)}</td>
+                        <td class="bar">
+                            <div class="size-bar">
+                                <div class="size-bar-fill" style="width: ${percent}%"></div>
+                            </div>
+                        </td>
+                        <td class="size">${entry.file_count.toLocaleString()}</td>
+                        <td class="size">${entry.dir_count.toLocaleString()}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Alerts
+        async function loadAlerts() {
+            try {
+                const data = await api('growth?limit=10');
+                renderGrowthList(data.growth || []);
+            } catch (e) {
+                showToast('无法加载告警数据');
+            }
+        }
+
+        function renderGrowthList(items) {
+            const list = document.getElementById('growthList');
+
+            if (items.length === 0) {
+                list.innerHTML = '<li class="growth-item" style="justify-content:center;color:#8b949e;">暂无增长数据，需要至少两次扫描</li>';
+                return;
+            }
+
+            list.innerHTML = items.map(item => `
+                <li class="growth-item">
+                    <span class="growth-path" title="${item.path}">${item.path}</span>
+                    <div class="growth-value">
+                        <span class="growth-size">+${formatSize(item.growth)}</span>
+                        <span class="growth-badge up">+${item.growth_percent}%</span>
+                    </div>
+                </li>
+            `).join('');
+        }
+
+        // Scan
+        async function triggerScan() {
+            try {
+                document.getElementById('scanBtn').disabled = true;
+                await apiPost('scan');
+            } catch (e) {
+                showToast('无法启动扫描: ' + e.message);
+                document.getElementById('scanBtn').disabled = false;
+            }
+        }
+
+        // Load status
+        async function loadStatus() {
+            try {
+                const data = await api('status');
+                if (data.next_scan) {
+                    document.getElementById('nextScan').textContent =
+                        '下次扫描: ' + formatDate(data.next_scan);
+                }
+                if (data.running_scan) {
+                    document.getElementById('statusDot').classList.add('scanning');
+                    document.getElementById('statusText').textContent = '扫描中...';
+                    document.getElementById('scanBtn').disabled = true;
+                }
+            } catch (e) {
+                console.error('Failed to load status:', e);
+            }
+        }
+
+        // Window resize handler
+        window.addEventListener('resize', () => {
+            Object.values(charts).forEach(chart => chart && chart.resize());
+        });
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            connectWebSocket();
+            loadStatus();
+            loadOverview();
+        });
+    </script>
+</body>
+</html>
