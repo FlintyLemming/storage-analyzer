@@ -71,6 +71,7 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_entries_path ON entries(path);
                 CREATE INDEX IF NOT EXISTS idx_entries_parent ON entries(parent_path);
                 CREATE INDEX IF NOT EXISTS idx_entries_depth ON entries(snapshot_id, depth);
+                CREATE INDEX IF NOT EXISTS idx_entries_snapshot_path ON entries(snapshot_id, path);
                 CREATE INDEX IF NOT EXISTS idx_snapshots_mount ON snapshots(mount_point);
                 CREATE INDEX IF NOT EXISTS idx_snapshots_time ON snapshots(completed_at);
             """)
@@ -247,8 +248,13 @@ class Database:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
-    async def get_top_growth(self, limit: int = 10) -> list[dict]:
-        """Get directories with largest growth since last scan."""
+    async def get_top_growth(self, limit: int = 10, max_depth: int = 4) -> list[dict]:
+        """Get directories with largest growth since last scan.
+
+        Args:
+            limit: Maximum number of results to return
+            max_depth: Maximum directory depth to consider (default 4 for performance)
+        """
         async with self.connection() as conn:
             cursor = await conn.execute(
                 """WITH recent AS (
@@ -273,10 +279,11 @@ class Database:
                         AND prev.snapshot_id = (SELECT id FROM previous)
                    WHERE curr.snapshot_id = (SELECT id FROM latest)
                          AND curr.is_dir = 1
+                         AND curr.depth <= ?
                          AND (curr.size - COALESCE(prev.size, 0)) > 0
                    ORDER BY growth DESC
                    LIMIT ?""",
-                (limit,)
+                (max_depth, limit)
             )
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
