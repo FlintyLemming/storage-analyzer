@@ -1,0 +1,5 @@
+Enclosure Port Sys_Name          Size      Type   RAID        RAID_Type    Pool TMeta  VolType      VolName 
+NAS_HOST  1    /dev/sdc(X)       2.73 TB   data   /dev/md2    RAID 5,512   2    64 GB  flexible     DataVol1
+NAS_HOST  2    /dev/sdd(X)       2.73 TB   data   /dev/md2    RAID 5,512   2    64 GB  flexible     DataVol1
+NAS_HOST  3    /dev/sda(X)       2.73 TB   data   /dev/md2    RAID 5,512   2    64 GB  flexible     DataVol1
+NAS_HOST  4    /dev/sdb(X)       3.64 TB   data   /dev/md2    RAID 5,512   2    64 GB  flexible     DataVol1

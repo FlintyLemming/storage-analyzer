@@ -1,0 +1,10 @@
+######################################################################
+# StorageAnalyzer package routines (sourced by the QDK installer)
+######################################################################
+
+pkg_post_install(){
+	$CMD_CHMOD 755 "$SYS_QPKG_DIR/StorageAnalyzer.sh" "$SYS_QPKG_DIR/bin/storage-analyzer" "$SYS_QPKG_DIR/web/api.cgi"
+	$CMD_CHMOD 644 "$SYS_QPKG_DIR/web/index.html" "$SYS_QPKG_DIR/web/app.js" "$SYS_QPKG_DIR/web/style.css"
+	$CMD_MKDIR -p "$SYS_QPKG_DIR/data/scans" "$SYS_QPKG_DIR/data/run" "$SYS_QPKG_DIR/data/logs"
+	$CMD_CHMOD 700 "$SYS_QPKG_DIR/data" "$SYS_QPKG_DIR/data/scans"
+}

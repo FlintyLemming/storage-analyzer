@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>存储分析器</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="toolbar">
+      <div class="toolbar-left">
+        <label class="scan-select-wrap" title="选择要查看的扫描结果">
+          <span class="label">扫描结果</span>
+          <select id="scanSelect" aria-label="扫描结果"></select>
+        </label>
+        <button class="btn primary" id="btnNewScan" type="button">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5a5.5 5.5 0 1 0 5.2 7.3.75.75 0 1 1 1.42.48A7 7 0 1 1 13 3.6V2a.75.75 0 0 1 1.5 0v3.5a.75.75 0 0 1-.75.75H10.3a.75.75 0 0 1 0-1.5h1.6A5.48 5.48 0 0 0 8 2.5Z"/></svg>
+          新建扫描
+        </button>
+        <button class="btn" id="btnHistory" type="button">历史</button>
+        <button class="btn" id="btnSettings" type="button">设置</button>
+      </div>
+      <div class="toolbar-right">
+        <div class="seg" id="viewSeg" role="radiogroup" aria-label="视图">
+          <button type="button" role="radio" data-view="space" class="on" title="按目录查看空间占用">空间占用</button>
+          <button type="button" role="radio" data-view="dups" title="内容完全相同的文件和文件夹">重复项</button>
+        </div>
+        <div class="seg" id="sizeSeg" role="radiogroup" aria-label="大小显示方式">
+          <button type="button" role="radio" data-size="disk" class="on" title="文件实际占用的磁盘空间">磁盘占用</button>
+          <button type="button" role="radio" data-size="apparent" title="文件内容本身的大小">表观大小</button>
+        </div>
+      </div>
+    </header>
+
+    <section class="progress hidden" id="progress" aria-live="polite">
+      <div class="progress-top">
+        <div class="progress-title"><span class="spinner" aria-hidden="true"></span><span id="progTitle">正在扫描…</span></div>
+        <button class="btn small" id="btnCancel" type="button">取消扫描</button>
+      </div>
+      <div class="bar"><div class="bar-fill" id="progBar"></div></div>
+      <div class="progress-stats" id="progStats"></div>
+      <div class="progress-path" id="progPath"></div>
+    </section>
+
+    <nav class="crumbs-row">
+      <ol class="crumbs" id="crumbs"></ol>
+      <div class="dir-summary" id="dirSummary"></div>
+    </nav>
+
+    <section class="volumes hidden" id="volumes"></section>
+
+    <main class="list-wrap" id="listWrap">
+      <table class="list" id="list">
+        <thead>
+          <tr>
+            <th class="c-name" data-sort="name">名称</th>
+            <th class="c-size" data-sort="size">大小</th>
+            <th class="c-pct" data-sort="size">占比</th>
+            <th class="c-items" data-sort="items">项数</th>
+            <th class="c-mtime" data-sort="mtime">修改时间</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="more hidden" id="moreWrap"><button class="btn" id="btnMore" type="button"></button></div>
+      <div class="state hidden" id="state"></div>
+    </main>
+
+    <section class="dupbar hidden" id="dupBar" aria-live="polite"></section>
+    <main class="list-wrap hidden" id="dupWrap">
+      <table class="list dups hidden" id="dupList">
+        <thead>
+          <tr>
+            <th class="c-name">名称</th>
+            <th class="c-copies">份数</th>
+            <th class="c-size">单份大小</th>
+            <th class="c-reclaim">可释放</th>
+          </tr>
+        </thead>
+        <tbody id="dupRows"></tbody>
+      </table>
+      <div class="more hidden" id="dupMoreWrap"><button class="btn" id="btnDupMore" type="button"></button></div>
+      <div class="state hidden" id="dupState"></div>
+    </main>
+  </div>
+
+  <div class="overlay hidden" id="overlay">
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
+      <div class="dialog-head">
+        <h2 id="dlgTitle"></h2>
+        <button class="icon-btn" id="dlgClose" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="dialog-body" id="dlgBody"></div>
+      <div class="dialog-foot" id="dlgFoot"></div>
+    </div>
+  </div>
+
+  <div class="toast hidden" id="toast" role="status"></div>
+  <script src="app.js"></script>
+</body>
+</html>
