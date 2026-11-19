@@ -4,7 +4,8 @@
   const KIND = { FILE: 0, DIR: 1, SYMLINK: 2, OTHER: 3, MOUNT: 4 };
   const FLAG = { ERROR: 1, HARDLINK_DUP: 2, BAD_NAME: 4 };
   const PAGE = 500;
-  const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  const { t } = I18N;
+  const WEEKDAYS = t('weekdays');
 
   const $ = (id) => document.getElementById(id);
   const el = (tag, attrs = {}, ...kids) => {
@@ -45,7 +46,7 @@
     dupSeq: 0,
   };
   const DUP_PAGE = 100;
-  const PHASE_TEXT = { prepare: '核对文件', quick: '快速比对', full: '完整校验', rollup: '汇总文件夹', write: '保存结果' };
+  const PHASES = new Set(['prepare', 'quick', 'full', 'rollup', 'write']);
 
   // ---------- formatting ----------
   function fmtSize(b) {
@@ -56,7 +57,7 @@
     while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
     return (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)) + ' ' + u[i];
   }
-  const fmtNum = (n) => (n || 0).toLocaleString('zh-CN');
+  const fmtNum = I18N.num;
   const pad = (n) => String(n).padStart(2, '0');
   function fmtTime(sec, withYear = true) {
     if (!sec) return '';
@@ -67,13 +68,14 @@
   function fmtDuration(s) {
     s = Math.max(0, Math.round(s || 0));
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
-    if (h) return `${h} 小时 ${m} 分`;
-    if (m) return `${m} 分 ${r} 秒`;
-    return `${r} 秒`;
+    if (h) return t('dur.h', { h, m });
+    if (m) return t('dur.m', { m, s: r });
+    return t('dur.s', { s: r });
   }
   const sizeOf = (it) => (state.sizeMode === 'apparent' ? it.asize : it.dsize);
-  const triggerText = (t) => (t === 'schedule' ? '定时' : '手动');
-  const statusText = { done: '完成', failed: '失败', canceled: '已取消', running: '进行中' };
+  const triggerText = (trigger) => t(trigger === 'schedule' ? 'trigger.schedule' : 'trigger.manual');
+  const STATUSES = new Set(['done', 'failed', 'canceled', 'running']);
+  const statusText = (status) => (STATUSES.has(status) ? t('status.' + status) : status);
 
   // ---------- API ----------
   class ApiError extends Error {
@@ -93,25 +95,35 @@
     try {
       res = await fetch('api.cgi?' + qs.toString(), init);
     } catch (e) {
-      throw new ApiError(0, 'network', '无法连接到 NAS');
+      throw new ApiError(0, 'network', t('net.down'));
     }
     let data = null;
     const text = await res.text();
     if (text) {
-      try { data = JSON.parse(text); } catch { throw new ApiError(res.status, 'bad_response', '服务返回了无法识别的内容'); }
+      try { data = JSON.parse(text); } catch { throw new ApiError(res.status, 'bad_response', t('net.badResponse')); }
     }
-    if (!res.ok) throw new ApiError(res.status, data && data.error, data && data.message);
+    if (!res.ok) throw new ApiError(res.status, data && data.error, errorText(data));
     return data;
+  }
+
+  // errorText shows a known API error code in the UI language; the server's
+  // own message is the fallback and fills {detail} where one is expected.
+  const ERROR_CODES = new Set(['not_logged_in', 'not_admin', 'auth_unavailable', 'task_running', 'not_running',
+    'scan_running', 'scan_not_found', 'no_scans', 'dir_not_found', 'invalid_settings', 'internal']);
+  function errorText(data) {
+    if (!data) return undefined;
+    if (ERROR_CODES.has(data.error)) return t('err.' + data.error, { detail: data.message || '' });
+    return data.message;
   }
 
   // ---------- toast ----------
   let toastTimer;
   function toast(msg) {
-    const t = $('toast');
-    t.textContent = msg;
-    t.classList.remove('hidden');
+    const box = $('toast');
+    box.textContent = msg;
+    box.classList.remove('hidden');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.classList.add('hidden'), 3200);
+    toastTimer = setTimeout(() => box.classList.add('hidden'), 3200);
   }
 
   // ---------- icons ----------
@@ -160,7 +172,7 @@
     sel.replaceChildren();
     const done = doneScans();
     if (!done.length) {
-      sel.append(el('option', { text: '暂无扫描结果', value: '' }));
+      sel.append(el('option', { text: t('scans.none'), value: '' }));
       sel.disabled = true;
       return;
     }
@@ -196,7 +208,7 @@
     } catch (e) {
       if (seq !== state.seq) return;
       if (e.code === 'scan_not_found' || e.code === 'dir_not_found') {
-        toast(e.code === 'scan_not_found' ? '该扫描结果已被删除，已切换到最新结果' : '目录不存在，已返回顶层');
+        toast(t(e.code === 'scan_not_found' ? 'notice.scanDeleted' : 'notice.dirGone'));
         await loadScans().catch(() => {});
         const latest = doneScans()[0];
         if (latest && (e.code === 'scan_not_found' ? latest.id !== state.scanId : true)) {
@@ -247,10 +259,10 @@
 
   function renderCrumbs() {
     const ol = $('crumbs');
-    ol.replaceChildren(el('li', {}, el('a', { text: '全部卷', onclick: () => openDir(0) })));
+    ol.replaceChildren(el('li', {}, el('a', { text: t('crumbs.all'), onclick: () => openDir(0) })));
     for (const p of state.path) ol.append(el('li', {}, el('a', { text: p.name, title: p.name, onclick: () => openDir(p.id) })));
     const d = state.dir;
-    $('dirSummary').textContent = d ? `本目录 ${fmtSize(sizeOf(d))} · ${fmtNum(d.items)} 项` : '';
+    $('dirSummary').textContent = d ? t('crumbs.summary', { size: fmtSize(sizeOf(d)), n: d.items || 0 }) : '';
   }
 
   function renderVolumes() {
@@ -267,19 +279,20 @@
       const pct = (x) => (total ? Math.min(100, (x / total) * 100) : 0) + '%';
       box.append(el('div', { class: 'vol' },
         el('div', { class: 'vol-head' },
-          el('div', { class: 'vol-name' }, v.name, el('small', { text: (v.pool ? `存储池 ${v.pool} · ` : '') + v.mountPoint })),
-          el('div', { class: 'vol-cap', text: total ? `已用 ${fmtSize(used)} / ${fmtSize(total)}（${((used / total) * 100).toFixed(1)}%）` : '' })),
-        el('div', { class: 'cap', title: '蓝色：扫描到的文件；橙色：未计入的已用空间；灰色：可用空间' },
+          el('div', { class: 'vol-name' }, v.name, el('small', { text: v.pool ? t('vol.poolMount', { pool: String(v.pool), mount: v.mountPoint }) : v.mountPoint })),
+          el('div', { class: 'vol-cap', text: total ? t('vol.cap', { used: fmtSize(used), total: fmtSize(total), pct: ((used / total) * 100).toFixed(1) }) : '' })),
+        el('div', { class: 'cap', title: t('vol.bar.title') },
           el('span', { class: 's', style: `width:${pct(Math.min(scanned, used || scanned))}` }),
           el('span', { class: 'u', style: `width:${pct(unacc)}` })),
         el('div', { class: 'legend' },
-          el('span', {}, el('i', { style: 'background:var(--bar)' }), `扫描到的文件 ${fmtSize(scanned)}`),
-          el('span', { title: '快照、文件系统元数据、扫描期间的变化等' }, el('i', { style: 'background:var(--unaccounted)' }), `未计入（快照 / 元数据等）${fmtSize(unacc)}`),
-          el('span', {}, el('i', { style: 'background:var(--free)' }), `可用 ${fmtSize(v.fsFree)}`))));
+          el('span', {}, el('i', { style: 'background:var(--bar)' }), t('vol.scanned', { size: fmtSize(scanned) })),
+          el('span', { title: t('vol.unacc.title') }, el('i', { style: 'background:var(--unaccounted)' }), t('vol.unacc', { size: fmtSize(unacc) })),
+          el('span', {}, el('i', { style: 'background:var(--free)' }), t('vol.free', { size: fmtSize(v.fsFree) })))));
     }
     if (state.skipped.length) {
-      const why = { not_mounted: '未挂载（可能是未解锁的加密卷）', not_share_volume: '不是数据卷' };
-      box.append(el('div', { class: 'notice', text: '已跳过：' + state.skipped.map((s) => `${s.name}（${why[s.reason] || s.reason}）`).join('，') }));
+      const why = (reason) => (reason === 'not_mounted' || reason === 'not_share_volume' ? t('skip.' + reason) : reason);
+      const list = state.skipped.map((s) => t('skip.item', { name: s.name, why: why(s.reason) })).join(t('skip.sep'));
+      box.append(el('div', { class: 'notice', text: t('skip.list', { list }) }));
     }
     box.classList.remove('hidden');
   }
@@ -298,11 +311,11 @@
     const pctVal = parentSize > 0 ? (size / parentSize) * 100 : 0;
     const enterable = (it.kind === KIND.DIR) && it.hasChildren;
     const tags = [];
-    if (it.kind === KIND.MOUNT) tags.push(el('span', { class: 'tag', text: '挂载点，已跳过' }));
-    if (it.kind === KIND.SYMLINK) tags.push(el('span', { class: 'tag', text: '符号链接' }));
-    if (it.flags & FLAG.HARDLINK_DUP) tags.push(el('span', { class: 'tag', text: '硬链接（已在别处计入）', title: '同一个文件的另一个硬链接已经计入大小' }));
-    if (it.flags & FLAG.ERROR) tags.push(el('span', { class: 'tag warn', text: '读取出错' }));
-    if (it.badName) tags.push(el('span', { class: 'tag warn', text: '名称编码异常', title: '文件名不是有效的 UTF-8，无法显示的字符已替换为 �' }));
+    if (it.kind === KIND.MOUNT) tags.push(el('span', { class: 'tag', text: t('tag.mount') }));
+    if (it.kind === KIND.SYMLINK) tags.push(el('span', { class: 'tag', text: t('tag.symlink') }));
+    if (it.flags & FLAG.HARDLINK_DUP) tags.push(el('span', { class: 'tag', text: t('tag.hardlink'), title: t('tag.hardlink.title') }));
+    if (it.flags & FLAG.ERROR) tags.push(el('span', { class: 'tag warn', text: t('tag.readError') }));
+    if (it.badName) tags.push(el('span', { class: 'tag warn', text: t('tag.badName'), title: t('tag.badName.title') }));
     const tr = el('tr', { class: [enterable ? 'dir' : '', idx === state.sel ? 'sel' : ''].join(' ').trim(), 'data-idx': idx },
       el('td', { class: 'c-name' }, el('div', { class: 'name', title: it.name }, icon(it.kind, isRoot), el('span', { class: 't', text: it.name }), tags)),
       el('td', { class: 'c-size', text: it.kind === KIND.MOUNT ? '—' : fmtSize(size) }),
@@ -319,7 +332,7 @@
     const tbody = $('rows');
     tbody.replaceChildren();
     if (state.dirId !== 0) {
-      const up = el('tr', { class: 'dir up' }, el('td', { class: 'c-name' }, el('div', { class: 'name' }, icon(KIND.DIR), el('span', { class: 't', text: '.. 上一级' }))),
+      const up = el('tr', { class: 'dir up' }, el('td', { class: 'c-name' }, el('div', { class: 'name' }, icon(KIND.DIR), el('span', { class: 't', text: t('row.up') }))),
         el('td'), el('td'), el('td'), el('td'));
       up.addEventListener('click', goUp);
       tbody.append(up);
@@ -330,9 +343,9 @@
     tbody.append(frag);
     const remaining = state.total - state.items.length;
     $('moreWrap').classList.toggle('hidden', remaining <= 0);
-    $('btnMore').textContent = `加载更多（剩余 ${fmtNum(remaining)} 项）`;
+    $('btnMore').textContent = t('list.more', { n: remaining });
     if (!state.items.length) {
-      tbody.append(el('tr', {}, el('td', { colspan: 5, class: 'muted', text: '空目录' })));
+      tbody.append(el('tr', {}, el('td', { colspan: 5, class: 'muted', text: t('list.empty') })));
     }
   }
 
@@ -358,31 +371,31 @@
   function renderEmpty() {
     if (state.view !== 'space') setView('space', { load: false });
     if (state.running) {
-      showState('正在进行第一次扫描', '扫描完成后会自动显示结果。扫描以最低优先级运行，不会影响 NAS 的正常使用。');
+      showState(t('empty.running.h'), t('empty.running.p'));
       return;
     }
-    showState('还没有扫描结果', '扫描会统计所有存储池上数据卷的空间占用，文件较多时需要几分钟到几十分钟。',
-      el('button', { class: 'btn primary', type: 'button', text: '开始第一次扫描', onclick: startScan }));
+    showState(t('empty.h'), t('empty.p'),
+      el('button', { class: 'btn primary', type: 'button', text: t('empty.start'), onclick: startScan }));
   }
 
   function showError(e) {
-    if (e.status === 401) return showState('请先登录 QTS', '登录已过期，请刷新 QTS 页面后重新打开存储分析器。');
-    if (e.status === 403 && e.code === 'not_admin') return showState('需要管理员权限', '存储分析器可以看到所有用户的文件名，只有管理员可以使用。');
-    toast(e.message || '操作失败');
+    if (e.status === 401) return showState(t('auth.h'), t('auth.p'));
+    if (e.status === 403 && e.code === 'not_admin') return showState(t('admin.h'), t('admin.p'));
+    toast(e.message || t('opFailed'));
   }
 
   // ---------- scanning ----------
   async function startScan() {
     try {
       await api('scan_start', {}, { method: 'POST' });
-      toast('扫描已开始');
+      toast(t('scan.started'));
       state.running = true;
       state.progress = null;
       renderProgress();
       if (state.scanId === null) renderEmpty();
       schedulePoll(800);
     } catch (e) {
-      if (e.code === 'task_running') { toast('已有任务正在进行'); schedulePoll(0); return; }
+      if (e.code === 'task_running') { toast(t('err.task_running')); schedulePoll(0); return; }
       showError(e);
     }
   }
@@ -390,12 +403,12 @@
   async function cancelScan() {
     const dup = isDupJob(state.progress);
     const ok = dup
-      ? await confirmDialog('取消重复检查', '确定要取消重复检查吗？已经算过的文件会保留在缓存里，下次检查不用重读。', '取消检查', true)
-      : await confirmDialog('取消扫描', '确定要取消当前扫描吗？已扫描的部分不会保存。', '取消扫描', true);
+      ? await confirmDialog(t('dup.cancel.h'), t('dup.cancel.p'), t('dup.cancel.ok'), true)
+      : await confirmDialog(t('scan.cancel.h'), t('scan.cancel.p'), t('scan.cancel.ok'), true);
     if (!ok) return;
     try {
       await api('scan_cancel', {}, { method: 'POST' });
-      toast(dup ? '正在取消重复检查…' : '正在取消扫描…');
+      toast(t(dup ? 'dup.canceling' : 'scan.canceling'));
       schedulePoll(800);
     } catch (e) {
       if (e.code === 'not_running') { schedulePoll(0); return; }
@@ -441,11 +454,11 @@
     const s = state.scans.find((x) => x.id === scanId);
     const d = s && s.dup;
     if (d && d.status === 'done') {
-      toast(d.groups ? `重复检查完成：${fmtNum(d.groups)} 组，可释放 ${fmtSize(state.sizeMode === 'apparent' ? d.reclaimASize : d.reclaimDSize)}` : '重复检查完成：没有发现重复项');
+      toast(d.groups ? t('dup.done', { groups: d.groups, size: fmtSize(state.sizeMode === 'apparent' ? d.reclaimASize : d.reclaimDSize) }) : t('dup.doneNone'));
     } else if (d && d.status === 'canceled') {
-      toast('重复检查已取消');
+      toast(t('dup.canceled'));
     } else if (d && d.status === 'failed') {
-      toast('重复检查失败：' + (d.errorMessage || '未知错误'));
+      toast(t('dup.failed', { msg: d.errorMessage || t('unknownError') }));
     }
     if (state.view === 'dups' && state.scanId === scanId) loadDups();
   }
@@ -456,16 +469,16 @@
     const fresh = state.scans.find((s) => !before.has(s.id) || (s.id === prevProgress?.scanId));
     const last = state.scans.find((s) => s.id === (prevProgress && prevProgress.scanId)) || fresh || state.scans[0];
     if (last && last.status === 'done') {
-      toast(`扫描完成：${fmtSize(last.totalDSize)}，${fmtNum(last.files)} 个文件，用时 ${fmtDuration(last.durationS)}`);
+      toast(t('scan.done', { size: fmtSize(last.totalDSize), files: last.files || 0, dur: fmtDuration(last.durationS) }));
       state.scanId = last.id;
       state.dirId = 0;
       renderScanSelect();
       showCurrent();
     } else if (last && last.status === 'canceled') {
-      toast('扫描已取消');
+      toast(t('scan.canceled'));
       if (state.scanId === null) renderEmpty();
     } else if (last && last.status === 'failed') {
-      toast('扫描失败：' + (last.errorMessage || '未知错误'));
+      toast(t('scan.failed', { msg: last.errorMessage || t('unknownError') }));
       if (state.scanId === null) renderEmpty();
     } else if (state.scanId === null) {
       renderEmpty();
@@ -480,20 +493,21 @@
     const p = state.progress || {};
     const elapsed = p.startedAt ? Date.now() / 1000 - p.startedAt : 0;
     const bar = $('progBar');
-    $('btnCancel').textContent = isDupJob(p) ? '取消检查' : '取消扫描';
+    $('btnCancel').textContent = t(isDupJob(p) ? 'dup.cancel.ok' : 'scan.cancel.ok');
     if (isDupJob(p)) return renderDupProgress(p, elapsed, bar);
     if (p.prevFiles > 0) {
       const pct = Math.min(99, (p.files / p.prevFiles) * 100);
       bar.classList.remove('indeterminate');
       bar.style.width = pct.toFixed(1) + '%';
-      $('progTitle').textContent = `正在扫描…约 ${pct.toFixed(0)}%`;
+      $('progTitle').textContent = t('prog.scanningPct', { pct: pct.toFixed(0) });
     } else {
       bar.classList.add('indeterminate');
-      $('progTitle').textContent = '正在扫描…';
+      $('progTitle').textContent = t('prog.scanning');
     }
-    $('progStats').textContent = `已扫描 ${fmtNum(p.files)} 个文件、${fmtNum(p.dirs)} 个目录 · ${fmtSize(p.bytes || 0)} · 用时 ${fmtDuration(elapsed)}`
-      + (p.errors ? ` · ${fmtNum(p.errors)} 个读取错误` : '')
-      + (p.trigger === 'schedule' ? (p.next === 'dupcheck' ? ' · 定时任务，完成后检查重复项' : ' · 定时任务') : '');
+    const stats = [t('prog.scanned', { files: p.files || 0, dirs: p.dirs || 0 }), fmtSize(p.bytes || 0), t('elapsed', { dur: fmtDuration(elapsed) })];
+    if (p.errors) stats.push(t('prog.errors', { n: p.errors }));
+    if (p.trigger === 'schedule') stats.push(t(p.next === 'dupcheck' ? 'prog.scheduledThenDup' : 'prog.scheduled'));
+    $('progStats').textContent = stats.join(' · ');
     $('progPath').textContent = p.current || '';
     $('progPath').title = p.current || '';
   }
@@ -515,7 +529,7 @@
     return new Promise((resolve) => {
       dialogResolve = resolve;
       const ok = el('button', { class: 'btn ' + (danger ? 'primary' : 'primary'), type: 'button', text: okText, onclick: () => { dialogResolve = null; $('overlay').classList.add('hidden'); resolve(true); } });
-      openDialog(title, el('p', { text, style: 'margin:0;line-height:1.6' }), [el('button', { class: 'btn', type: 'button', text: '返回', onclick: closeDialog }), ok], true);
+      openDialog(title, el('p', { text, style: 'margin:0;line-height:1.6' }), [el('button', { class: 'btn', type: 'button', text: t('back'), onclick: closeDialog }), ok], true);
     });
   }
 
@@ -524,30 +538,30 @@
     const rows = state.scans.map((s) => el('tr', { class: s.id === state.scanId ? 'current' : '' },
       el('td', { text: fmtTime(s.startedAt) }),
       el('td', { text: triggerText(s.trigger) }),
-      el('td', {}, el('span', { class: 'status ' + s.status, text: statusText[s.status] || s.status, title: s.errorMessage || '' })),
+      el('td', {}, el('span', { class: 'status ' + s.status, text: statusText(s.status), title: s.errorMessage || '' })),
       el('td', { class: 'num', text: s.status === 'done' ? fmtSize(s.totalDSize) : '' }),
       el('td', { class: 'num', text: s.status === 'done' ? fmtNum(s.files) : '' }),
       el('td', { class: 'num', text: s.durationS ? fmtDuration(s.durationS) : '' }),
       el('td', { class: 'num', text: s.dbBytes ? fmtSize(s.dbBytes) : '' }),
       el('td', {}, dupCell(s)),
       el('td', {},
-        s.status === 'done' && s.id !== state.scanId ? el('button', { class: 'btn small', type: 'button', text: '打开', onclick: () => { closeDialog(); selectScan(s.id); } }) : '',
+        s.status === 'done' && s.id !== state.scanId ? el('button', { class: 'btn small', type: 'button', text: t('hist.open'), onclick: () => { closeDialog(); selectScan(s.id); } }) : '',
         ' ',
-        s.status !== 'running' ? el('button', { class: 'btn small danger', type: 'button', text: '删除', onclick: () => deleteScan(s) }) : '')));
+        s.status !== 'running' ? el('button', { class: 'btn small danger', type: 'button', text: t('hist.delete'), onclick: () => deleteScan(s) }) : '')));
     const body = state.scans.length
       ? el('table', { class: 'hist' },
-        el('thead', {}, el('tr', {}, ['开始时间', '方式', '状态', '总占用', '文件数', '耗时', '结果大小', '重复检查', ''].map((h) => el('th', { text: h })))),
+        el('thead', {}, el('tr', {}, t('hist.cols').map((h) => el('th', { text: h })))),
         el('tbody', {}, rows))
-      : el('p', { class: 'muted', text: '还没有扫描记录。' });
+      : el('p', { class: 'muted', text: t('hist.none') });
     const keep = state.settings ? state.settings.retention : 10;
-    openDialog('扫描历史', el('div', {}, body, el('p', { class: 'muted', style: 'margin:12px 0 0;font-size:12px', text: `自动保留最近 ${keep} 次成功的扫描结果，可在设置中修改。` })));
+    openDialog(t('hist.title'), el('div', {}, body, el('p', { class: 'muted', style: 'margin:12px 0 0;font-size:12px', text: t('hist.keep', { n: keep }) })));
   }
 
   async function deleteScan(s) {
-    if (!(await confirmDialog('删除扫描结果', `确定删除 ${fmtTime(s.startedAt)} 的扫描记录吗？此操作只删除扫描结果，不会影响 NAS 上的任何文件。`, '删除', true))) return;
+    if (!(await confirmDialog(t('del.h'), t('del.p', { time: fmtTime(s.startedAt) }), t('del.ok'), true))) return;
     try {
       await api('scan_delete', { scan: s.id }, { method: 'POST' });
-      toast('已删除');
+      toast(t('del.done'));
       if (s.id === state.scanId) {
         await loadScans();
         const latest = doneScans()[0];
@@ -566,23 +580,23 @@
     const s = { ...(state.settings || { scheduleMode: 'off', weekday: 0, time: '03:00', retention: 10, defaultSizeMode: 'disk', scheduleDupCheck: false }) };
     const radio = (name, value, label, checked) => el('label', {}, el('input', { type: 'radio', name, value, checked }), label);
     const modeBox = el('div', { class: 'radios' },
-      radio('mode', 'off', '关闭', s.scheduleMode === 'off'),
-      radio('mode', 'daily', '每天', s.scheduleMode === 'daily'),
-      radio('mode', 'weekly', '每周', s.scheduleMode === 'weekly'));
+      radio('mode', 'off', t('set.off'), s.scheduleMode === 'off'),
+      radio('mode', 'daily', t('set.daily'), s.scheduleMode === 'daily'),
+      radio('mode', 'weekly', t('set.weekly'), s.scheduleMode === 'weekly'));
     const weekday = el('select', { id: 'fWeekday' }, WEEKDAYS.map((d, i) => el('option', { value: i, text: d, selected: i === s.weekday })));
     const time = el('input', { type: 'time', id: 'fTime', value: s.time, required: true });
     const keep = el('input', { type: 'number', id: 'fKeep', min: 1, max: 100, value: s.retention });
     const sizeSel = el('select', { id: 'fSize' },
-      el('option', { value: 'disk', text: '磁盘占用', selected: s.defaultSizeMode === 'disk' }),
-      el('option', { value: 'apparent', text: '表观大小', selected: s.defaultSizeMode === 'apparent' }));
-    const weekRow = el('div', { class: 'row' }, el('span', { text: '星期' }), weekday);
-    const timeRow = el('div', { class: 'row' }, el('span', { text: '时间' }), time);
+      el('option', { value: 'disk', text: t('size.disk'), selected: s.defaultSizeMode === 'disk' }),
+      el('option', { value: 'apparent', text: t('size.apparent'), selected: s.defaultSizeMode === 'apparent' }));
+    const weekRow = el('div', { class: 'row' }, el('span', { text: t('set.weekday') }), weekday);
+    const timeRow = el('div', { class: 'row' }, el('span', { text: t('set.time') }), time);
     const err = el('div', { class: 'err-text' });
-    const timeHint = el('div', { class: 'hint', text: '按 NAS 本地时间执行，建议选择夜间空闲时段。' });
+    const timeHint = el('div', { class: 'hint', text: t('set.timeHint') });
     const dupBox = el('input', { type: 'checkbox', id: 'fDup', checked: !!s.scheduleDupCheck });
-    const dupRow = el('div', { class: 'row' }, el('span', { text: '重复检查' }),
-      el('div', { class: 'radios' }, el('label', {}, dupBox, '扫描完成后检查重复项')));
-    const dupHint = el('div', { class: 'hint', text: '首次检查可能要几个小时，之后通常几分钟到几十分钟；期间 NAS 硬盘会比较忙。' });
+    const dupRow = el('div', { class: 'row' }, el('span', { text: t('set.dup') }),
+      el('div', { class: 'radios' }, el('label', {}, dupBox, t('set.dupLabel'))));
+    const dupHint = el('div', { class: 'hint', text: t('set.dupHint') });
     const sync = () => {
       const m = modeBox.querySelector('input:checked').value;
       weekRow.classList.toggle('hidden', m !== 'weekly');
@@ -590,14 +604,14 @@
     };
     modeBox.addEventListener('change', sync);
     const form = el('div', { class: 'form' },
-      el('div', { class: 'row' }, el('span', { text: '定时扫描' }), modeBox),
+      el('div', { class: 'row' }, el('span', { text: t('set.schedule') }), modeBox),
       weekRow, timeRow, timeHint, dupRow, dupHint,
-      el('div', { class: 'row' }, el('span', { text: '保留结果' }), el('div', {}, keep, ' 次')),
-      el('div', { class: 'hint', text: '保留最近几次成功的扫描结果（1–100），每份结果约占几十到几百 MB。' }),
-      el('div', { class: 'row' }, el('span', { text: '默认显示' }), sizeSel),
+      el('div', { class: 'row' }, el('span', { text: t('set.keep') }), el('div', {}, keep, ' ' + t('set.keepUnit'))),
+      el('div', { class: 'hint', text: t('set.keepHint') }),
+      el('div', { class: 'row' }, el('span', { text: t('set.defaultSize') }), sizeSel),
       err);
     sync();
-    const save = el('button', { class: 'btn primary', type: 'button', text: '保存' });
+    const save = el('button', { class: 'btn primary', type: 'button', text: t('set.save') });
     save.addEventListener('click', async () => {
       const next = {
         scheduleMode: modeBox.querySelector('input:checked').value,
@@ -607,20 +621,21 @@
         defaultSizeMode: sizeSel.value,
         scheduleDupCheck: dupBox.checked,
       };
-      if (!(next.retention >= 1 && next.retention <= 100)) { err.textContent = '保留次数需要在 1–100 之间'; return; }
+      if (!(next.retention >= 1 && next.retention <= 100)) { err.textContent = t('set.keepRange'); return; }
       save.disabled = true;
       try {
         state.settings = await api('settings', {}, { method: 'POST', body: next });
         closeDialog();
-        toast(next.scheduleMode === 'off' ? '设置已保存，定时扫描已关闭'
-          : `设置已保存：${next.scheduleMode === 'daily' ? '每天' : WEEKDAYS[next.weekday]} ${next.time} 自动扫描${next.scheduleDupCheck ? '并检查重复项' : ''}`);
+        toast(next.scheduleMode === 'off' ? t('set.savedOff') : t('set.savedOn', {
+          daily: next.scheduleMode === 'daily', weekday: WEEKDAYS[next.weekday], time: next.time, dup: next.scheduleDupCheck,
+        }));
       } catch (e) {
-        err.textContent = e.message || '保存失败';
+        err.textContent = e.message || t('set.saveFailed');
       } finally {
         save.disabled = false;
       }
     });
-    openDialog('设置', form, [el('button', { class: 'btn', type: 'button', text: '取消', onclick: closeDialog }), save], true);
+    openDialog(t('set.title'), form, [el('button', { class: 'btn', type: 'button', text: t('cancel'), onclick: closeDialog }), save], true);
   }
 
   // ---------- duplicates ----------
@@ -658,7 +673,7 @@
     } catch (e) {
       if (seq !== state.dupSeq) return;
       if (e.code === 'scan_not_found') {
-        toast('该扫描结果已被删除，已切换到最新结果');
+        toast(t('notice.scanDeleted'));
         await loadScans().catch(() => {});
         const latest = doneScans()[0];
         if (latest) { state.scanId = latest.id; state.dirId = 0; renderScanSelect(); return loadDups(); }
@@ -686,14 +701,14 @@
   async function startDupCheck() {
     try {
       await api('dup_start', { scan: state.scanId }, { method: 'POST' });
-      toast('重复检查已开始');
+      toast(t('dup.started'));
       state.running = true;
       state.progress = { job: 'dupcheck', scanId: state.scanId, phase: 'prepare', startedAt: Date.now() / 1000 };
       renderProgress();
       renderDups();
       schedulePoll(800);
     } catch (e) {
-      if (e.code === 'task_running') { toast('已有任务正在进行，请等它结束后再检查'); schedulePoll(0); return; }
+      if (e.code === 'task_running') { toast(t('dup.busyStart')); schedulePoll(0); return; }
       showError(e);
     }
   }
@@ -714,45 +729,45 @@
     const busy = state.running;
     const again = (text) => el('button', {
       class: 'btn small', type: 'button', text, disabled: busy,
-      title: busy ? '已有扫描或重复检查正在进行' : '', onclick: startDupCheck,
+      title: busy ? t('dup.busyTitle') : '', onclick: startDupCheck,
     });
     if (dupRunningHere()) {
-      parts.push(el('span', { text: '正在检查重复项，进度见上方。' + (result ? '下面是上一次的结果。' : '') }));
+      parts.push(el('span', { text: t('dup.runningHere', { prev: !!result }) }));
     } else if (check && (check.status === 'failed' || check.status === 'canceled')) {
       parts.push(el('span', { class: 'warn', text: check.status === 'canceled'
-        ? '上次检查已取消，已经算过的文件下次不会重读。' + (result ? '下面是更早一次的结果。' : '')
-        : `上次检查失败：${check.errorMessage || '未知错误'}` + (result ? '。下面是更早一次的结果。' : '') }));
+        ? t('dup.lastCanceled', { prev: !!result })
+        : t('dup.lastFailed', { msg: check.errorMessage || t('unknownError'), prev: !!result }) }));
     } else if (check && check.status === 'running') {
-      parts.push(el('span', { class: 'warn', text: '上次检查没有正常结束。' }));
+      parts.push(el('span', { class: 'warn', text: t('dup.lastUnfinished') }));
     }
     if (result && !dupRunningHere()) {
       const summary = el('span', {},
-        result.groups ? el('b', { text: `${fmtNum(result.groups)} 组重复，可释放 ${fmtSize(reclaimOf(result))}` }) : el('b', { text: '没有发现重复项' }),
-        ` · 检查于 ${fmtTime(result.finishedAt)}`,
-        result.changed ? ` · ${fmtNum(result.changed)} 个文件扫描后有变化，未参与比较` : '',
-        result.errors ? ` · ${fmtNum(result.errors)} 个文件读取出错` : '');
+        el('b', { text: result.groups ? t('dup.summary', { groups: result.groups, size: fmtSize(reclaimOf(result)) }) : t('dup.none') }),
+        ' · ' + t('dup.checkedAt', { time: fmtTime(result.finishedAt) }),
+        result.changed ? ' · ' + t('dup.changed', { n: result.changed }) : '',
+        result.errors ? ' · ' + t('dup.errors', { n: result.errors }) : '');
       parts.push(summary);
     }
-    if (result || check) parts.push(again('重新检查'));
+    if (result || check) parts.push(again(t('dup.recheck')));
     bar.replaceChildren(...parts);
     bar.classList.toggle('hidden', !parts.length || state.view !== 'dups');
   }
 
   function dupMemberRows(g) {
     const rows = [];
-    if (g.kind === KIND.DIR) rows.push(el('tr', { class: 'member-note' }, el('td', { colspan: 4, text: `每份 ${fmtNum(g.files)} 个文件，文件名、目录结构和内容都相同` })));
+    if (g.kind === KIND.DIR) rows.push(el('tr', { class: 'member-note' }, el('td', { colspan: 4, text: t('dup.dirNote', { n: g.files || 0 }) })));
     for (const m of g.members) {
       const tags = [];
-      if (m.covered) tags.push(el('span', { class: 'tag', text: '位于重复文件夹内', title: '这一份所在的上级文件夹本身就有完全相同的副本' }));
-      if (m.badName) tags.push(el('span', { class: 'tag warn', text: '名称编码异常' }));
+      if (m.covered) tags.push(el('span', { class: 'tag', text: t('dup.covered'), title: t('dup.covered.title') }));
+      if (m.badName) tags.push(el('span', { class: 'tag warn', text: t('tag.badName'), title: t('tag.badName.title') }));
       rows.push(el('tr', { class: 'member' }, el('td', { colspan: 4 },
         el('div', { class: 'mpath' },
           el('span', { class: 't', title: m.path }, el('bdi', { dir: 'ltr', text: m.path })),
           tags,
-          el('button', { class: 'btn small jump', type: 'button', text: '↗ 查看位置', title: '在空间占用视图中打开所在目录', onclick: (ev) => { ev.stopPropagation(); jumpTo(m); } })))));
+          el('button', { class: 'btn small jump', type: 'button', text: t('dup.jump'), title: t('dup.jump.title'), onclick: (ev) => { ev.stopPropagation(); jumpTo(m); } })))));
     }
     if (g.copies > g.members.length) {
-      rows.push(el('tr', { class: 'member-note' }, el('td', { colspan: 4, text: `还有 ${fmtNum(g.copies - g.members.length)} 份未列出` })));
+      rows.push(el('tr', { class: 'member-note' }, el('td', { colspan: 4, text: t('dup.moreCopies', { n: g.copies - g.members.length }) })));
     }
     return rows;
   }
@@ -767,12 +782,12 @@
       $('dupMoreWrap').classList.add('hidden');
       st.replaceChildren();
       if (dupRunningHere()) {
-        st.append(el('h3', { text: '正在检查重复项' }), el('p', { text: '检查完成后会自动显示结果。检查以最低优先级运行，不影响 NAS 的正常使用；可以随时取消，已经算过的文件下次不会重读。' }));
+        st.append(el('h3', { text: t('dup.checking.h') }), el('p', { text: t('dup.checking.p') }));
       } else {
-        st.append(el('h3', { text: check ? '这次扫描还没有检查结果' : '还没有检查过重复项' }),
-          el('p', { text: '重复检查会读取大小相同的文件的内容，并用完整的校验值确认是否完全相同。第一次检查可能需要数小时，以最低优先级运行，不影响 NAS 的正常使用；之后再检查只会读取新增或改动过的文件。' }),
-          el('button', { class: 'btn primary', type: 'button', text: '开始重复检查', disabled: state.running, onclick: startDupCheck }),
-          state.running ? el('p', { class: 'muted', text: '已有扫描或重复检查正在进行，结束后才能开始。' }) : '');
+        st.append(el('h3', { text: t(check ? 'dup.unchecked.h' : 'dup.never.h') }),
+          el('p', { text: t('dup.intro') }),
+          el('button', { class: 'btn primary', type: 'button', text: t('dup.start'), disabled: state.running, onclick: startDupCheck }),
+          state.running ? el('p', { class: 'muted', text: t('dup.busyNote') }) : '');
       }
       st.classList.remove('hidden');
       return;
@@ -780,7 +795,7 @@
     if (!groups.length) {
       $('dupList').classList.add('hidden');
       $('dupMoreWrap').classList.add('hidden');
-      st.replaceChildren(el('h3', { text: '没有发现重复项' }), el('p', { text: '这次扫描中没有内容完全相同的文件或文件夹（空文件、硬链接和缩略图等系统文件不计入）。' }));
+      st.replaceChildren(el('h3', { text: t('dup.none') }), el('p', { text: t('dup.noneFound.p') }));
       st.classList.remove('hidden');
       return;
     }
@@ -790,7 +805,7 @@
     for (const g of groups) {
       const open = state.dup.open.has(g.id);
       const tags = [];
-      if (g.badName) tags.push(el('span', { class: 'tag warn', text: '名称编码异常' }));
+      if (g.badName) tags.push(el('span', { class: 'tag warn', text: t('tag.badName'), title: t('tag.badName.title') }));
       const tr = el('tr', { class: 'group' + (open ? ' open' : ''), 'aria-expanded': open },
         el('td', { class: 'c-name' }, el('div', { class: 'name', title: g.members[0] ? g.members[0].path : g.name },
           el('span', { class: 'caret', 'aria-hidden': 'true', text: '▶' }), icon(g.kind), el('span', { class: 't', text: g.name }), tags)),
@@ -807,7 +822,7 @@
     tbody.append(frag);
     const remaining = total - groups.length;
     $('dupMoreWrap').classList.toggle('hidden', remaining <= 0);
-    $('btnDupMore').textContent = `加载更多（剩余 ${fmtNum(remaining)} 组）`;
+    $('btnDupMore').textContent = t('dup.more', { n: remaining });
   }
 
   function jumpTo(m) {
@@ -816,7 +831,7 @@
   }
 
   function renderDupProgress(p, elapsed, bar) {
-    const phase = PHASE_TEXT[p.phase] || '准备中';
+    const phase = t(PHASES.has(p.phase) ? 'phase.' + p.phase : 'phase.default');
     let pct = null;
     if (p.totalBytes > 0) pct = (p.doneBytes / p.totalBytes) * 100;
     else if (p.totalFiles > 0) pct = (p.doneFiles / p.totalFiles) * 100;
@@ -827,18 +842,19 @@
     } else {
       bar.classList.add('indeterminate');
     }
-    $('progTitle').textContent = `正在检查重复项 · ${phase}` + (pct !== null ? ` ${pct.toFixed(0)}%` : '…');
+    $('progTitle').textContent = t('dup.progTitle', { phase }) + (pct !== null ? ` ${pct.toFixed(0)}%` : '…');
     const stats = [];
+    const files = () => t('dup.files', { done: p.doneFiles || 0, total: p.totalFiles || 0 });
     if (p.phase === 'quick' || p.phase === 'full') {
-      stats.push(`已读 ${fmtSize(p.doneBytes || 0)} / ${fmtSize(p.totalBytes || 0)}`, `${fmtNum(p.doneFiles)} / ${fmtNum(p.totalFiles)} 个文件`);
+      stats.push(t('dup.readBytes', { done: fmtSize(p.doneBytes || 0), total: fmtSize(p.totalBytes || 0) }), files());
     } else if (p.phase === 'prepare' && p.totalFiles) {
-      stats.push(`${fmtNum(p.doneFiles)} / ${fmtNum(p.totalFiles)} 个文件`);
+      stats.push(files());
     }
-    if (p.cacheHits) stats.push(`缓存命中 ${fmtNum(p.cacheHits)}`);
-    if (p.changed) stats.push(`扫描后有变化 ${fmtNum(p.changed)}`);
-    if (p.errors) stats.push(`读取出错 ${fmtNum(p.errors)}`);
-    stats.push(`用时 ${fmtDuration(elapsed)}`);
-    if (p.trigger === 'schedule') stats.push('定时任务');
+    if (p.cacheHits) stats.push(t('dup.cacheHits', { n: p.cacheHits }));
+    if (p.changed) stats.push(t('dup.changedShort', { n: p.changed }));
+    if (p.errors) stats.push(t('dup.errorsShort', { n: p.errors }));
+    stats.push(t('elapsed', { dur: fmtDuration(elapsed) }));
+    if (p.trigger === 'schedule') stats.push(t('prog.scheduled'));
     $('progStats').textContent = stats.join(' · ');
     const cur = p.phase === 'quick' || p.phase === 'full' ? (p.current || '') : '';
     $('progPath').textContent = cur;
@@ -848,9 +864,8 @@
   function dupCell(s) {
     const d = s.dup;
     if (!d) return s.status === 'done' ? el('span', { class: 'muted', text: '—' }) : '';
-    if (d.status === 'done') return el('span', { class: 'num', text: d.groups ? `可释放 ${fmtSize(d.reclaimDSize)}` : '无重复' });
-    const text = { running: '进行中', failed: '失败', canceled: '已取消' }[d.status] || d.status;
-    return el('span', { class: 'status ' + d.status, text, title: d.errorMessage || '' });
+    if (d.status === 'done') return el('span', { class: 'num', text: d.groups ? t('hist.dupReclaim', { size: fmtSize(d.reclaimDSize) }) : t('hist.dupNone') });
+    return el('span', { class: 'status ' + d.status, text: statusText(d.status), title: d.errorMessage || '' });
   }
 
   // ---------- controls ----------
@@ -931,6 +946,7 @@
   }
 
   async function init() {
+    I18N.apply();
     bind();
     try {
       state.settings = await api('settings');

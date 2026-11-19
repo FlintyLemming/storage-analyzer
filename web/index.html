@@ -1,42 +1,42 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>存储分析器</title>
+  <title>Storage Analyzer</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="app" id="app">
     <header class="toolbar">
       <div class="toolbar-left">
-        <label class="scan-select-wrap" title="选择要查看的扫描结果">
-          <span class="label">扫描结果</span>
-          <select id="scanSelect" aria-label="扫描结果"></select>
+        <label class="scan-select-wrap" data-i18n-title="tb.scan.title">
+          <span class="label" data-i18n="tb.scan">Scan</span>
+          <select id="scanSelect" data-i18n-aria-label="tb.scan"></select>
         </label>
         <button class="btn primary" id="btnNewScan" type="button">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5a5.5 5.5 0 1 0 5.2 7.3.75.75 0 1 1 1.42.48A7 7 0 1 1 13 3.6V2a.75.75 0 0 1 1.5 0v3.5a.75.75 0 0 1-.75.75H10.3a.75.75 0 0 1 0-1.5h1.6A5.48 5.48 0 0 0 8 2.5Z"/></svg>
-          新建扫描
+          <span data-i18n="tb.newScan">New scan</span>
         </button>
-        <button class="btn" id="btnHistory" type="button">历史</button>
-        <button class="btn" id="btnSettings" type="button">设置</button>
+        <button class="btn" id="btnHistory" type="button" data-i18n="tb.history">History</button>
+        <button class="btn" id="btnSettings" type="button" data-i18n="tb.settings">Settings</button>
       </div>
       <div class="toolbar-right">
-        <div class="seg" id="viewSeg" role="radiogroup" aria-label="视图">
-          <button type="button" role="radio" data-view="space" class="on" title="按目录查看空间占用">空间占用</button>
-          <button type="button" role="radio" data-view="dups" title="内容完全相同的文件和文件夹">重复项</button>
+        <div class="seg" id="viewSeg" role="radiogroup" data-i18n-aria-label="tb.view">
+          <button type="button" role="radio" data-view="space" class="on" data-i18n="view.space" data-i18n-title="view.space.title">Space</button>
+          <button type="button" role="radio" data-view="dups" data-i18n="view.dups" data-i18n-title="view.dups.title">Duplicates</button>
         </div>
-        <div class="seg" id="sizeSeg" role="radiogroup" aria-label="大小显示方式">
-          <button type="button" role="radio" data-size="disk" class="on" title="文件实际占用的磁盘空间">磁盘占用</button>
-          <button type="button" role="radio" data-size="apparent" title="文件内容本身的大小">表观大小</button>
+        <div class="seg" id="sizeSeg" role="radiogroup" data-i18n-aria-label="tb.sizeMode">
+          <button type="button" role="radio" data-size="disk" class="on" data-i18n="size.disk" data-i18n-title="size.disk.title">Disk usage</button>
+          <button type="button" role="radio" data-size="apparent" data-i18n="size.apparent" data-i18n-title="size.apparent.title">Apparent size</button>
         </div>
       </div>
     </header>
 
     <section class="progress hidden" id="progress" aria-live="polite">
       <div class="progress-top">
-        <div class="progress-title"><span class="spinner" aria-hidden="true"></span><span id="progTitle">正在扫描…</span></div>
-        <button class="btn small" id="btnCancel" type="button">取消扫描</button>
+        <div class="progress-title"><span class="spinner" aria-hidden="true"></span><span id="progTitle" data-i18n="prog.scanning">Scanning…</span></div>
+        <button class="btn small" id="btnCancel" type="button" data-i18n="scan.cancel.ok">Cancel scan</button>
       </div>
       <div class="bar"><div class="bar-fill" id="progBar"></div></div>
       <div class="progress-stats" id="progStats"></div>
@@ -54,11 +54,11 @@
       <table class="list" id="list">
         <thead>
           <tr>
-            <th class="c-name" data-sort="name">名称</th>
-            <th class="c-size" data-sort="size">大小</th>
-            <th class="c-pct" data-sort="size">占比</th>
-            <th class="c-items" data-sort="items">项数</th>
-            <th class="c-mtime" data-sort="mtime">修改时间</th>
+            <th class="c-name" data-sort="name" data-i18n="col.name">Name</th>
+            <th class="c-size" data-sort="size" data-i18n="col.size">Size</th>
+            <th class="c-pct" data-sort="size" data-i18n="col.pct">Share</th>
+            <th class="c-items" data-sort="items" data-i18n="col.items">Items</th>
+            <th class="c-mtime" data-sort="mtime" data-i18n="col.mtime">Modified</th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -72,10 +72,10 @@
       <table class="list dups hidden" id="dupList">
         <thead>
           <tr>
-            <th class="c-name">名称</th>
-            <th class="c-copies">份数</th>
-            <th class="c-size">单份大小</th>
-            <th class="c-reclaim">可释放</th>
+            <th class="c-name" data-i18n="col.name">Name</th>
+            <th class="c-copies" data-i18n="col.copies">Copies</th>
+            <th class="c-size" data-i18n="col.sizeEach">Size each</th>
+            <th class="c-reclaim" data-i18n="col.reclaim">Reclaimable</th>
           </tr>
         </thead>
         <tbody id="dupRows"></tbody>
@@ -89,7 +89,7 @@
     <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
       <div class="dialog-head">
         <h2 id="dlgTitle"></h2>
-        <button class="icon-btn" id="dlgClose" type="button" aria-label="关闭">×</button>
+        <button class="icon-btn" id="dlgClose" type="button" data-i18n-aria-label="dlg.close">×</button>
       </div>
       <div class="dialog-body" id="dlgBody"></div>
       <div class="dialog-foot" id="dlgFoot"></div>
@@ -97,6 +97,7 @@
   </div>
 
   <div class="toast hidden" id="toast" role="status"></div>
+  <script src="i18n.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

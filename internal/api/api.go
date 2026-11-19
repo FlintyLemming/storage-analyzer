@@ -104,7 +104,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, admin, err := h.cfg.Auth.Check(r)
 	if err != nil {
 		if errors.Is(err, ErrNotLoggedIn) {
-			fail(w, 401, "not_logged_in", "请先登录 QTS")
+			fail(w, 401, "not_logged_in", "not logged in to QTS")
 		} else {
 			log.Printf("auth check: %v", err)
 			fail(w, 502, "auth_unavailable", err.Error())
@@ -112,7 +112,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !admin {
-		fail(w, 403, "not_admin", "需要管理员权限")
+		fail(w, 403, "not_admin", "administrator access required")
 		return
 	}
 	isPost := r.Method == http.MethodPost
@@ -186,7 +186,7 @@ func (h *handler) scanStart(w http.ResponseWriter) {
 		h.internal(w, err)
 		return
 	} else if running {
-		fail(w, 409, "task_running", "已有任务正在进行")
+		fail(w, 409, "task_running", "another task is already running")
 		return
 	}
 	if err := h.cfg.Spawn("scan", "--trigger", "manual"); err != nil {
@@ -199,7 +199,7 @@ func (h *handler) scanStart(w http.ResponseWriter) {
 func (h *handler) scanCancel(w http.ResponseWriter) {
 	err := runner.Cancel(h.cfg.DataDir)
 	if errors.Is(err, runner.ErrNotRunning) {
-		fail(w, 404, "not_running", "没有正在进行的扫描")
+		fail(w, 404, "not_running", "no scan is running")
 		return
 	}
 	if err != nil {
@@ -216,7 +216,7 @@ func (h *handler) scanDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if p, running, _ := runner.Running(h.cfg.DataDir); running && p.ScanID == id {
-		fail(w, 409, "scan_running", "该扫描正在进行，请先取消")
+		fail(w, 409, "scan_running", "scan is still running; cancel it first")
 		return
 	}
 	c, err := catalog.Open(h.cfg.DataDir)
@@ -226,7 +226,7 @@ func (h *handler) scanDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.Close()
 	if err := c.Delete(id); errors.Is(err, catalog.ErrNotFound) {
-		fail(w, 404, "scan_not_found", "扫描记录不存在")
+		fail(w, 404, "scan_not_found", "scan not found")
 		return
 	} else if err != nil {
 		h.internal(w, err)
@@ -259,7 +259,7 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		}
 		scan, err = c.Get(id)
 		if err != nil || scan.Status != "done" {
-			fail(w, 404, "scan_not_found", "扫描结果不存在或已被删除")
+			fail(w, 404, "scan_not_found", "scan not found")
 			return
 		}
 	} else {
@@ -276,13 +276,13 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !found {
-			fail(w, 404, "no_scans", "还没有扫描结果")
+			fail(w, 404, "no_scans", "no scan results yet")
 			return
 		}
 	}
 	dbPath := catalog.ScanPath(h.cfg.DataDir, scan.ID)
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		fail(w, 404, "scan_not_found", "扫描结果不存在或已被删除")
+		fail(w, 404, "scan_not_found", "scan not found")
 		return
 	}
 	db, err := scandb.Open(dbPath)
@@ -301,7 +301,7 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	dir, err := db.Get(dirID)
 	if errors.Is(err, scandb.ErrNotFound) {
-		fail(w, 404, "dir_not_found", "目录不存在")
+		fail(w, 404, "dir_not_found", "directory not found")
 		return
 	} else if err != nil {
 		h.internal(w, err)
@@ -412,7 +412,7 @@ func (h *handler) dupStart(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, err)
 		return
 	} else if running {
-		fail(w, 409, "task_running", "已有任务正在进行")
+		fail(w, 409, "task_running", "another task is already running")
 		return
 	}
 	c, err := catalog.Open(h.cfg.DataDir)
@@ -423,7 +423,7 @@ func (h *handler) dupStart(w http.ResponseWriter, r *http.Request) {
 	scan, ok := h.doneScan(c, r.URL.Query().Get("scan"))
 	c.Close()
 	if !ok {
-		fail(w, 404, "scan_not_found", "扫描结果不存在或已被删除")
+		fail(w, 404, "scan_not_found", "scan not found")
 		return
 	}
 	if err := h.cfg.Spawn("dupcheck", "--scan", strconv.FormatInt(scan.ID, 10)); err != nil {
@@ -474,7 +474,7 @@ func (h *handler) dups(w http.ResponseWriter, r *http.Request) {
 	defer c.Close()
 	scan, ok := h.doneScan(c, q.Get("scan"))
 	if !ok {
-		fail(w, 404, "scan_not_found", "扫描结果不存在或已被删除")
+		fail(w, 404, "scan_not_found", "scan not found")
 		return
 	}
 	resp := map[string]any{"scan": scan, "check": nil, "result": nil, "total": 0, "groups": []DupGroup{}}
