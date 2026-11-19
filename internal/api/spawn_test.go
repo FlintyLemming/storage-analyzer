@@ -5,9 +5,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // The scan must survive the CGI request: it has to run in its own session.
@@ -25,14 +26,14 @@ func TestSpawnDetachedNewSession(t *testing.T) {
 	if pid == 0 {
 		t.Fatal("child never ran")
 	}
-	sid, err := syscall.Getsid(pid)
+	sid, err := unix.Getsid(pid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sid != pid {
 		t.Fatalf("child session = %d, want its own session %d", sid, pid)
 	}
-	if mine, _ := syscall.Getsid(0); sid == mine {
+	if mine, _ := unix.Getsid(0); sid == mine {
 		t.Fatal("child shares the parent's session")
 	}
 }

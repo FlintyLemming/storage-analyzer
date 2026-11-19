@@ -3,21 +3,25 @@ package dupcheck
 import (
 	"os"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 func statInfo(st *syscall.Stat_t) FileInfo {
+	// Timespec fields are int32 on 32-bit Linux: widen before multiplying.
+	mtimeNS := int64(st.Mtim.Sec)*1e9 + int64(st.Mtim.Nsec)
+	ctimeNS := int64(st.Ctim.Sec)*1e9 + int64(st.Ctim.Nsec)
 	return FileInfo{
 		Dev: uint64(st.Dev), Ino: st.Ino, Size: st.Size,
-		MTime:   st.Mtim.Sec,
-		MTimeNS: st.Mtim.Sec*1e9 + st.Mtim.Nsec,
-		CTimeNS: st.Ctim.Sec*1e9 + st.Ctim.Nsec,
+		MTime:   int64(st.Mtim.Sec),
+		MTimeNS: mtimeNS,
+		CTimeNS: ctimeNS,
 		Regular: st.Mode&syscall.S_IFMT == syscall.S_IFREG,
 	}
 }
 
-const fadvDontNeed = 4 // POSIX_FADV_DONTNEED
-
-// dropCache asks the kernel to drop f's cached pages (whole file).
+// dropCache asks the kernel to drop f's cached pages (whole file). The
+// fadvise syscall differs between architectures; unix.Fadvise handles it.
 func dropCache(f *os.File) {
-	syscall.Syscall6(syscall.SYS_FADVISE64, f.Fd(), 0, 0, fadvDontNeed, 0, 0)
+	unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
 }

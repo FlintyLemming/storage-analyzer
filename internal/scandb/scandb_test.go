@@ -97,7 +97,11 @@ func TestListLargeDirPaging(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if el := time.Since(start); el > 2*time.Second {
+	el := time.Since(start)
+	t.Logf("query took %v", el)
+	// Under CPU emulation (scripts/test-linux.sh on a foreign architecture)
+	// the time says nothing about real hardware.
+	if el > 2*time.Second && os.Getenv("SA_EMULATED") == "" {
 		t.Fatalf("query took %v", el)
 	}
 	if total != n || len(got) != 10 {

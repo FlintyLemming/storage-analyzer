@@ -6,7 +6,8 @@
 set -eu
 cd "$(dirname "$0")/.."
 HOST=${HOST:-hf-qts}
-PKG=$(ls -t build/StorageAnalyzer_*_x86_64.qpkg | head -1)
+ARCH=${ARCH:-x86_64} # x86_64 | arm_64 | arm-x41, must match the NAS
+PKG=$(ls -t build/StorageAnalyzer_*_"$ARCH".qpkg | head -1)
 NAME=$(basename "$PKG")
 STAGE=/share/CACHEDEV2_DATA/.sa-deploy
 ssh "$HOST" "mkdir -p $STAGE"
