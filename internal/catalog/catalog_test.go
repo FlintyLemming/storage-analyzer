@@ -130,7 +130,7 @@ func TestSettingsDefaultsAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Settings{ScheduleMode: "off", Weekday: 0, Time: "03:00", Retention: 10, DefaultSizeMode: "disk"}
+	want := Settings{ScheduleMode: "off", Weekday: 0, Time: "03:00", Retention: 10, DefaultSizeMode: "disk", ScheduleDupCheck: false}
 	if s != want {
 		t.Fatalf("defaults = %+v, want %+v", s, want)
 	}
@@ -147,7 +147,7 @@ func TestSettingsDefaultsAndValidation(t *testing.T) {
 			t.Fatalf("SaveSettings(%+v) accepted invalid settings", b)
 		}
 	}
-	good := Settings{ScheduleMode: "weekly", Weekday: 6, Time: "23:45", Retention: 3, DefaultSizeMode: "apparent"}
+	good := Settings{ScheduleMode: "weekly", Weekday: 6, Time: "23:45", Retention: 3, DefaultSizeMode: "apparent", ScheduleDupCheck: true}
 	if err := c.SaveSettings(good); err != nil {
 		t.Fatal(err)
 	}

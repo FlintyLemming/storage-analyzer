@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"storage-analyzer/internal/catalog"
+	"storage-analyzer/internal/dupcheck"
 	"storage-analyzer/internal/scandb"
 	"storage-analyzer/internal/scanner"
 	"storage-analyzer/internal/volumes"
@@ -49,6 +50,7 @@ type Progress struct {
 	Errors    int64  `json:"errors"`
 	Current   string `json:"current"`
 	PrevFiles int64  `json:"prevFiles"`
+	Next      string `json:"next,omitempty"` // dupcheck: a duplicate check follows this scan
 
 	// Duplicate check only.
 	Phase      string `json:"phase,omitempty"` // prepare | quick | full | rollup | write
@@ -79,6 +81,9 @@ type Options struct {
 	Discover func() ([]volumes.Volume, []volumes.Skipped, error)
 	Now      func() time.Time
 	Workers  int
+	FS       dupcheck.FS // RunScheduled: filesystem for the duplicate check (default: real)
+
+	thenDupCheck bool // set by RunScheduled: a duplicate check follows
 }
 
 func lockPath(dataDir string) string     { return filepath.Join(dataDir, "run", "scan.lock") }
@@ -138,17 +143,22 @@ func (s *rootSink) Add(e scandb.Entry) error {
 
 // Run performs one scan and returns its catalog id.
 func Run(ctx context.Context, o Options) (int64, error) {
+	lock, err := tryLock(o.DataDir, 5)
+	if err != nil {
+		return 0, err
+	}
+	defer lock.Close()
+	return runScan(ctx, o, lock)
+}
+
+// runScan performs one scan while the caller holds lock.
+func runScan(ctx context.Context, o Options, lock *os.File) (int64, error) {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
 	if o.Discover == nil {
 		o.Discover = volumes.Discover
 	}
-	lock, err := tryLock(o.DataDir, 5)
-	if err != nil {
-		return 0, err
-	}
-	defer lock.Close()
 	lock.Truncate(0)
 	lock.WriteAt([]byte(strconv.Itoa(os.Getpid())), 0)
 
@@ -198,6 +208,9 @@ func Run(ctx context.Context, o Options) (int64, error) {
 
 	walker := &scanner.Walker{Workers: o.Workers}
 	prog := Progress{Job: "scan", ScanID: id, PID: os.Getpid(), Trigger: o.Trigger, StartedAt: started.Unix(), PrevFiles: prevFiles}
+	if o.thenDupCheck {
+		prog.Next = "dupcheck"
+	}
 	snapshot := func() Progress {
 		p := prog
 		p.Files = walker.Stats.Files.Load()

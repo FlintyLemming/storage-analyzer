@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ type DupOptions struct {
 	ScanID  int64
 	Now     func() time.Time
 	FS      dupcheck.FS // default: the real filesystem
+	Trigger string      // manual (default) | schedule
 }
 
 // CachePath is the duplicate-check digest cache.
@@ -34,14 +36,25 @@ func CachePath(dataDir string) string { return filepath.Join(dataDir, "dupcache.
 // RunDupCheck checks one finished scan for duplicate files and folders. It
 // takes the same lock as Run, so scans and checks never overlap.
 func RunDupCheck(ctx context.Context, o DupOptions) (dupcheck.Summary, error) {
-	if o.Now == nil {
-		o.Now = time.Now
-	}
 	lock, err := tryLock(o.DataDir, 5)
 	if err != nil {
 		return dupcheck.Summary{}, err
 	}
 	defer lock.Close()
+	return runDupCheck(ctx, o, lock)
+}
+
+// runDupCheck checks one finished scan while the caller holds lock.
+func runDupCheck(ctx context.Context, o DupOptions, lock *os.File) (dupcheck.Summary, error) {
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	if o.Trigger == "" {
+		o.Trigger = "manual"
+	}
+	// The candidate table is pointer-free, so collecting more often is cheap
+	// and keeps the peak close to the live heap on a box shared with users.
+	defer debug.SetGCPercent(debug.SetGCPercent(25))
 	lock.Truncate(0)
 	lock.WriteAt([]byte(strconv.Itoa(os.Getpid())), 0)
 
@@ -82,7 +95,7 @@ func RunDupCheck(ctx context.Context, o DupOptions) (dupcheck.Summary, error) {
 	defer cache.Close()
 
 	dp := &dupcheck.Progress{}
-	base := Progress{Job: "dupcheck", ScanID: o.ScanID, PID: os.Getpid(), Trigger: "manual", StartedAt: started.Unix()}
+	base := Progress{Job: "dupcheck", ScanID: o.ScanID, PID: os.Getpid(), Trigger: o.Trigger, StartedAt: started.Unix()}
 	snapshot := func() Progress {
 		p := base
 		p.Phase = dp.PhaseName()

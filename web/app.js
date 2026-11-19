@@ -423,6 +423,9 @@
     state.progress = st.progress;
     renderProgress();
     if (state.view === 'dups' && state.dup.loaded && was !== state.running) renderDups();
+    // A scheduled run goes straight from its scan into a duplicate check
+    // without ever going idle: treat the switch as the scan finishing.
+    if (was && state.running && prev && !isDupJob(prev) && isDupJob(state.progress)) await onScanFinished(prev);
     if (state.running) {
       schedulePoll(2000);
     } else if (was) {
@@ -489,7 +492,8 @@
       $('progTitle').textContent = '正在扫描…';
     }
     $('progStats').textContent = `已扫描 ${fmtNum(p.files)} 个文件、${fmtNum(p.dirs)} 个目录 · ${fmtSize(p.bytes || 0)} · 用时 ${fmtDuration(elapsed)}`
-      + (p.errors ? ` · ${fmtNum(p.errors)} 个读取错误` : '') + (p.trigger === 'schedule' ? ' · 定时任务' : '');
+      + (p.errors ? ` · ${fmtNum(p.errors)} 个读取错误` : '')
+      + (p.trigger === 'schedule' ? (p.next === 'dupcheck' ? ' · 定时任务，完成后检查重复项' : ' · 定时任务') : '');
     $('progPath').textContent = p.current || '';
     $('progPath').title = p.current || '';
   }
@@ -559,7 +563,7 @@
   }
 
   function showSettings() {
-    const s = { ...(state.settings || { scheduleMode: 'off', weekday: 0, time: '03:00', retention: 10, defaultSizeMode: 'disk' }) };
+    const s = { ...(state.settings || { scheduleMode: 'off', weekday: 0, time: '03:00', retention: 10, defaultSizeMode: 'disk', scheduleDupCheck: false }) };
     const radio = (name, value, label, checked) => el('label', {}, el('input', { type: 'radio', name, value, checked }), label);
     const modeBox = el('div', { class: 'radios' },
       radio('mode', 'off', '关闭', s.scheduleMode === 'off'),
@@ -575,16 +579,19 @@
     const timeRow = el('div', { class: 'row' }, el('span', { text: '时间' }), time);
     const err = el('div', { class: 'err-text' });
     const timeHint = el('div', { class: 'hint', text: '按 NAS 本地时间执行，建议选择夜间空闲时段。' });
+    const dupBox = el('input', { type: 'checkbox', id: 'fDup', checked: !!s.scheduleDupCheck });
+    const dupRow = el('div', { class: 'row' }, el('span', { text: '重复检查' }),
+      el('div', { class: 'radios' }, el('label', {}, dupBox, '扫描完成后检查重复项')));
+    const dupHint = el('div', { class: 'hint', text: '首次检查可能要几个小时，之后通常几分钟到几十分钟；期间 NAS 硬盘会比较忙。' });
     const sync = () => {
       const m = modeBox.querySelector('input:checked').value;
       weekRow.classList.toggle('hidden', m !== 'weekly');
-      timeRow.classList.toggle('hidden', m === 'off');
-      timeHint.classList.toggle('hidden', m === 'off');
+      for (const n of [timeRow, timeHint, dupRow, dupHint]) n.classList.toggle('hidden', m === 'off');
     };
     modeBox.addEventListener('change', sync);
     const form = el('div', { class: 'form' },
       el('div', { class: 'row' }, el('span', { text: '定时扫描' }), modeBox),
-      weekRow, timeRow, timeHint,
+      weekRow, timeRow, timeHint, dupRow, dupHint,
       el('div', { class: 'row' }, el('span', { text: '保留结果' }), el('div', {}, keep, ' 次')),
       el('div', { class: 'hint', text: '保留最近几次成功的扫描结果（1–100），每份结果约占几十到几百 MB。' }),
       el('div', { class: 'row' }, el('span', { text: '默认显示' }), sizeSel),
@@ -598,6 +605,7 @@
         time: time.value || '03:00',
         retention: Number(keep.value),
         defaultSizeMode: sizeSel.value,
+        scheduleDupCheck: dupBox.checked,
       };
       if (!(next.retention >= 1 && next.retention <= 100)) { err.textContent = '保留次数需要在 1–100 之间'; return; }
       save.disabled = true;
@@ -605,7 +613,7 @@
         state.settings = await api('settings', {}, { method: 'POST', body: next });
         closeDialog();
         toast(next.scheduleMode === 'off' ? '设置已保存，定时扫描已关闭'
-          : `设置已保存：${next.scheduleMode === 'daily' ? '每天' : WEEKDAYS[next.weekday]} ${next.time} 自动扫描`);
+          : `设置已保存：${next.scheduleMode === 'daily' ? '每天' : WEEKDAYS[next.weekday]} ${next.time} 自动扫描${next.scheduleDupCheck ? '并检查重复项' : ''}`);
       } catch (e) {
         err.textContent = e.message || '保存失败';
       } finally {
@@ -830,6 +838,7 @@
     if (p.changed) stats.push(`扫描后有变化 ${fmtNum(p.changed)}`);
     if (p.errors) stats.push(`读取出错 ${fmtNum(p.errors)}`);
     stats.push(`用时 ${fmtDuration(elapsed)}`);
+    if (p.trigger === 'schedule') stats.push('定时任务');
     $('progStats').textContent = stats.join(' · ');
     const cur = p.phase === 'quick' || p.phase === 'full' ? (p.current || '') : '';
     $('progPath').textContent = cur;

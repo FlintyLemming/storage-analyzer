@@ -60,6 +60,9 @@ type Settings struct {
 	Time            string `json:"time"`            // "HH:MM"
 	Retention       int    `json:"retention"`       // 1–100
 	DefaultSizeMode string `json:"defaultSizeMode"` // disk | apparent
+	// ScheduleDupCheck runs a duplicate check of each scheduled scan right
+	// after it succeeds. Manual scans are not affected.
+	ScheduleDupCheck bool `json:"scheduleDupCheck"`
 }
 
 // DefaultSettings are used until the user saves settings.
@@ -326,6 +329,8 @@ func (c *Catalog) Settings() (Settings, error) {
 			s.Retention, _ = strconv.Atoi(v)
 		case "default_size_mode":
 			s.DefaultSizeMode = v
+		case "schedule_dupcheck":
+			s.ScheduleDupCheck = v == "1"
 		}
 	}
 	return s, rows.Err()
@@ -347,12 +352,20 @@ func (c *Catalog) SaveSettings(s Settings) error {
 		"schedule_time":     s.Time,
 		"retention_count":   strconv.Itoa(s.Retention),
 		"default_size_mode": s.DefaultSizeMode,
+		"schedule_dupcheck": boolText(s.ScheduleDupCheck),
 	} {
 		if _, err := tx.Exec("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)", k, v); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
+}
+
+func boolText(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
 }
 
 const dupCols = `scan_id, status, started_at, finished_at, duration_s, ngroups, reclaim_dsize, reclaim_asize,

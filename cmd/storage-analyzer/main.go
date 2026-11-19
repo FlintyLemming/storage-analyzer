@@ -20,13 +20,13 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
 
 	"storage-analyzer/internal/api"
 	"storage-analyzer/internal/catalog"
+	"storage-analyzer/internal/dupcheck"
 	"storage-analyzer/internal/runner"
 	"storage-analyzer/internal/schedule"
 	"storage-analyzer/internal/volumes"
@@ -147,19 +147,46 @@ func scan(p paths, trigger string) error {
 	defer stop()
 	start := time.Now()
 	log.Printf("scan (%s) starting, pid %d", trigger, os.Getpid())
+	if trigger == "schedule" {
+		return scheduledRun(ctx, p, start)
+	}
 	id, err := runner.Run(ctx, runner.Options{DataDir: p.data, Trigger: trigger, Discover: discover})
-	switch {
-	case errors.Is(err, runner.ErrBusy):
+	if errors.Is(err, runner.ErrBusy) {
 		log.Printf("scan (%s) skipped: another scan or duplicate check is running", trigger)
 		return nil
+	}
+	return logScanResult(id, time.Since(start), err)
+}
+
+// scheduledRun is one cron firing: a scan and, if enabled in the settings, a
+// duplicate check of it, under one lock.
+func scheduledRun(ctx context.Context, p paths, start time.Time) error {
+	res, err := runner.RunScheduled(ctx, runner.Options{DataDir: p.data, Discover: discover})
+	if errors.Is(err, runner.ErrBusy) {
+		log.Printf("scheduled run skipped: another scan or duplicate check is running")
+		return nil
+	}
+	end := res.ScanDone
+	if end.IsZero() {
+		end = time.Now()
+	}
+	if err := logScanResult(res.ScanID, end.Sub(start), err); err != nil || !res.Checked {
+		return err
+	}
+	return logDupResult(res.ScanID, time.Since(res.ScanDone), res.Dup, res.DupErr)
+}
+
+func logScanResult(id int64, took time.Duration, err error) error {
+	took = took.Round(time.Second)
+	switch {
 	case errors.Is(err, context.Canceled):
-		log.Printf("scan %d canceled after %v", id, time.Since(start).Round(time.Second))
+		log.Printf("scan %d canceled after %v", id, took)
 		return nil
 	case err != nil:
 		log.Printf("scan %d failed: %v", id, err)
 		return err
 	}
-	log.Printf("scan %d done in %v", id, time.Since(start).Round(time.Second))
+	log.Printf("scan %d done in %v", id, took)
 	return nil
 }
 
@@ -168,28 +195,31 @@ func dupCheck(p paths, id int64) error {
 		return fmt.Errorf("dupcheck needs --scan <id>")
 	}
 	runner.SetLowPriority()
-	// The candidate table is pointer-free, so collecting more often is cheap
-	// and keeps the peak close to the live heap on a box shared with users.
-	debug.SetGCPercent(25)
 	openLog(p)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	defer stop()
 	start := time.Now()
 	log.Printf("dupcheck of scan %d starting, pid %d", id, os.Getpid())
 	sum, err := runner.RunDupCheck(ctx, runner.DupOptions{DataDir: p.data, ScanID: id})
-	switch {
-	case errors.Is(err, runner.ErrBusy):
+	if errors.Is(err, runner.ErrBusy) {
 		log.Printf("dupcheck of scan %d skipped: another scan or check is running", id)
 		return nil
+	}
+	return logDupResult(id, time.Since(start), sum, err)
+}
+
+func logDupResult(id int64, took time.Duration, sum dupcheck.Summary, err error) error {
+	took = took.Round(time.Second)
+	switch {
 	case errors.Is(err, context.Canceled):
-		log.Printf("dupcheck of scan %d canceled after %v", id, time.Since(start).Round(time.Second))
+		log.Printf("dupcheck of scan %d canceled after %v", id, took)
 		return nil
 	case err != nil:
 		log.Printf("dupcheck of scan %d failed: %v", id, err)
 		return err
 	}
 	log.Printf("dupcheck of scan %d done in %v: %d groups, reclaimable %d B (disk), read %d B, %d cache hits, %d changed, %d errors",
-		id, time.Since(start).Round(time.Second), sum.Groups, sum.ReclaimDSize, sum.BytesRead, sum.CacheHits, sum.Changed, sum.Errors)
+		id, took, sum.Groups, sum.ReclaimDSize, sum.BytesRead, sum.CacheHits, sum.Changed, sum.Errors)
 	return nil
 }
 
