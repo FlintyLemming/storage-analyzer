@@ -94,6 +94,11 @@ func main() {
 	noAuth := fs.Bool("insecure-no-auth", false, "serve: skip QTS session check (development)")
 	fs.Parse(args)
 	p := resolvePaths(*rootFlag)
+	// SQLite spills sorts to /var/tmp by default, a 64MB tmpfs on QTS. It reads
+	// this variable only once, so set it before the first database is opened.
+	if err := os.Setenv("SQLITE_TMPDIR", p.data); err != nil {
+		log.Fatalf("set SQLite temp directory: %v", err)
+	}
 
 	var err error
 	switch cmd {
