@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestHashVerify(t *testing.T) {
@@ -77,14 +76,28 @@ func TestPasswordFileReload(t *testing.T) {
 	if got, err := p.Current(); err != nil || got != "A-hash" {
 		t.Fatalf("got %q, %v", got, err)
 	}
-	if err := WritePasswordFile(path, "B-hash-longer"); err != nil {
+	st, err := os.Stat(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	future := time.Now().Add(2 * time.Second)
-	if err := os.Chtimes(path, future, future); err != nil {
+	// Same size and mtime, rewritten in place: the cache must be kept.
+	if err := os.WriteFile(path, []byte("X-hash\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := p.Current(); err != nil || got != "B-hash-longer" {
+	if err := os.Chtimes(path, st.ModTime(), st.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.Current(); err != nil || got != "A-hash" {
+		t.Fatalf("unchanged file re-read: got %q, %v", got, err)
+	}
+	// Rename-based replacement with same size and same mtime: new inode.
+	if err := WritePasswordFile(path, "B-hash"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, st.ModTime(), st.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.Current(); err != nil || got != "B-hash" {
 		t.Fatalf("got %q, %v", got, err)
 	}
 }

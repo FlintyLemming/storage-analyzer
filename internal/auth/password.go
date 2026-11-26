@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
@@ -78,8 +77,7 @@ func Verify(phc, pw string) (bool, error) {
 	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" {
 		return false, errBadHash
 	}
-	var version int
-	if n, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil || n != 1 || version != argon2.Version {
+	if parts[2] != "v=19" {
 		return false, fmt.Errorf("%w: unsupported version", errBadHash)
 	}
 	var m, t, p uint64
@@ -124,13 +122,12 @@ func Fingerprint(phc string) string {
 }
 
 // PasswordFile reads the PHC string from a file, re-reading it only when the
-// file's mtime or size changed. Safe for concurrent use.
+// file's identity, mtime or size changed. Safe for concurrent use.
 type PasswordFile struct {
 	Path string
 
 	mu    sync.Mutex
-	mtime time.Time
-	size  int64
+	info  os.FileInfo
 	val   string
 	valid bool
 }
@@ -145,7 +142,7 @@ func (p *PasswordFile) Current() (string, error) {
 		p.valid = false
 		return "", err
 	}
-	if p.valid && st.ModTime().Equal(p.mtime) && st.Size() == p.size {
+	if p.valid && os.SameFile(p.info, st) && st.ModTime().Equal(p.info.ModTime()) && st.Size() == p.info.Size() {
 		return p.val, nil
 	}
 	b, err := os.ReadFile(p.Path)
@@ -154,7 +151,7 @@ func (p *PasswordFile) Current() (string, error) {
 		return "", err
 	}
 	p.val = strings.TrimRight(string(b), "\r\n")
-	p.mtime, p.size, p.valid = st.ModTime(), st.Size(), true
+	p.info, p.valid = st, true
 	return p.val, nil
 }
 
