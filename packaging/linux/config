@@ -1,0 +1,15 @@
+# /etc/storage-analyzer/config
+# Format: key = value, one per line. Whole-line comments only.
+# Restart the service after editing: systemctl restart storage-analyzer
+listen = :8099
+# TLS certificate and key (PEM). Set both to serve HTTPS.
+# tls_cert = /etc/storage-analyzer/cert.pem
+# tls_key = /etc/storage-analyzer/key.pem
+# Reverse proxies whose X-Forwarded-For header is trusted (comma separated).
+# trusted_proxies = 127.0.0.1, ::1
+# Where scan results and state are stored.
+# data_dir = /var/lib/storage-analyzer
+# Directories to scan, comma separated. Default: discover mounted filesystems automatically.
+# paths = auto
+# Mount points to leave out in auto-discovery mode (comma separated).
+# exclude = /boot/efi, /mnt/backup

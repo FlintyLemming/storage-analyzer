@@ -5,7 +5,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
-VER=$(sed -n 's/^QPKG_VER="\(.*\)"/\1/p' packaging/qpkg/qpkg.cfg)
+VER=$(tr -d '[:space:]' < VERSION)
 STAGE="$ROOT/build/qpkg"
 
 # QDK architecture, GOARCH, GOARM
@@ -29,7 +29,7 @@ echo "$TARGETS" | while read -r qarch goarch goarm; do
 	mkdir -p "$STAGE/$qarch/bin"
 	[ "$goarm" = "-" ] && goarm=
 	GOOS=linux GOARCH=$goarch GOARM=$goarm CGO_ENABLED=0 \
-		go build -tags qnap -trimpath -ldflags="-s -w" -o "$STAGE/$qarch/bin/storage-analyzer" ./cmd/storage-analyzer
+		go build -tags qnap -trimpath -ldflags "-s -w -X main.version=$VER" -o "$STAGE/$qarch/bin/storage-analyzer" ./cmd/storage-analyzer
 	chmod 755 "$STAGE/$qarch/bin/storage-analyzer"
 done
 for qarch in $(echo "$TARGETS" | cut -d' ' -f1); do
@@ -37,7 +37,8 @@ for qarch in $(echo "$TARGETS" | cut -d' ' -f1); do
 done
 
 echo "==> stage package"
-cp packaging/qpkg/qpkg.cfg packaging/qpkg/package_routines "$STAGE/"
+cp packaging/qpkg/package_routines "$STAGE/"
+sed "s/@VERSION@/$VER/" packaging/qpkg/qpkg.cfg > "$STAGE/qpkg.cfg"
 cp -R packaging/qpkg/config "$STAGE/config"
 cp packaging/qpkg/shared/StorageAnalyzer.sh "$STAGE/shared/"
 cp packaging/qpkg/shared/web/api.cgi "$STAGE/shared/web/"

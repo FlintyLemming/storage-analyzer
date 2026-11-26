@@ -1,0 +1,27 @@
+name: storage-analyzer
+version: ${VERSION}
+arch: ${ARCH}
+platform: linux
+section: utils
+maintainer: FlintyLemming
+description: ncdu-style disk usage analyzer with a web UI.
+license: MIT
+homepage: https://github.com/FlintyLemming/storage-analyzer
+contents:
+  - src: build/linux/nfpm-bin/storage-analyzer
+    dst: /usr/bin/storage-analyzer
+    file_info:
+      mode: 0755
+  - src: packaging/linux/storage-analyzer.service
+    dst: /usr/lib/systemd/system/storage-analyzer.service
+    file_info:
+      mode: 0644
+  - src: packaging/linux/config
+    dst: /etc/storage-analyzer/config
+    type: config|noreplace
+    file_info:
+      mode: 0644
+scripts:
+  postinstall: packaging/linux/scripts/postinstall.sh
+  preremove: packaging/linux/scripts/preremove.sh
+  postremove: packaging/linux/scripts/postremove.sh
