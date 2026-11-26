@@ -47,7 +47,7 @@ echo "$TARGETS" | while read -r goarch goarm tarch narch darch rarch; do
 		# to a fixed path.
 		mkdir -p "$OUT/nfpm-bin"
 		cp "$dir/storage-analyzer" "$OUT/nfpm-bin/storage-analyzer"
-		docker run --rm -i -v "$ROOT:/src" -w /src \
+		docker run --rm -i --user "$(id -u):$(id -g)" -v "$ROOT:/src" -w /src \
 			-e VERSION="$VER" -e ARCH="$narch" \
 			"$NFPM_IMAGE" package --config packaging/linux/nfpm.yaml \
 			--packager $pkgr --target "build/linux/$file" </dev/null

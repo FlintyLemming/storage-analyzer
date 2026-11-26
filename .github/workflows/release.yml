@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: docker/setup-qemu-action@v3
+      - name: Check tag matches VERSION
+        run: |
+          if [ "$GITHUB_REF_NAME" != "v$(cat VERSION)" ]; then
+            echo "tag $GITHUB_REF_NAME does not match VERSION v$(cat VERSION)" >&2
+            exit 1
+          fi
+      - name: Build QNAP packages
+        run: ./scripts/build.sh
+      - name: Build Linux packages
+        run: ./scripts/build-linux.sh
+      - name: Checksums
+        working-directory: build
+        run: sha256sum -- *.qpkg linux/* > SHA256SUMS
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --generate-notes --title "$GITHUB_REF_NAME" \
+            build/*.qpkg build/linux/* build/SHA256SUMS
