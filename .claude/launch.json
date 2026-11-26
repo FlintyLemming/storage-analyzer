@@ -6,7 +6,7 @@
       "runtimeExecutable": "/bin/sh",
       "runtimeArgs": [
         "-c",
-        "SA_DEV_ROOTS=$HOME/Projects:$HOME/go/pkg/mod exec ./build/dev/bin/storage-analyzer serve --insecure-no-auth --root build/dev --web web"
+        "mkdir -p build/dev && printf 'data_dir = %s/build/dev/data\\npaths = %s/Projects\\n' \"$PWD\" \"$HOME\" > build/dev/config && go build -o build/dev/bin/storage-analyzer ./cmd/storage-analyzer && exec build/dev/bin/storage-analyzer serve --config build/dev/config --insecure-no-auth --web web"
       ],
       "port": 8099
     }

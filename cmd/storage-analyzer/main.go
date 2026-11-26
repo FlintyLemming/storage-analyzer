@@ -1,6 +1,6 @@
 // Command storage-analyzer is the StorageAnalyzer binary. The platform
 // specific commands live in platform_qnap.go (build tag qnap, the QPKG) and
-// platform_linux.go (everything else); this file holds the shared ones:
+// platform_generic.go (everything else); this file holds the shared ones:
 //
 //	storage-analyzer scan --trigger manual|schedule
 //	storage-analyzer dupcheck --scan <id>
