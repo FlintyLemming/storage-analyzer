@@ -14,10 +14,11 @@ import (
 
 // Volume is a mounted data volume on a user storage pool.
 type Volume struct {
-	Name       string `json:"name"`       // volName, e.g. "DataVol1"
-	Pool       string `json:"pool"`       // pool id, "" when unknown
-	Device     string `json:"device"`     // e.g. "/dev/mapper/cachedev2"
-	MountPoint string `json:"mountPoint"` // e.g. "/share/CACHEDEV2_DATA"
+	Name       string `json:"name"`             // volName, e.g. "DataVol1"
+	Pool       string `json:"pool"`             // pool id, "" when unknown
+	Device     string `json:"device"`           // e.g. "/dev/mapper/cachedev2"
+	MountPoint string `json:"mountPoint"`       // e.g. "/share/CACHEDEV2_DATA"
+	FSType     string `json:"fsType,omitempty"` // e.g. "ext4"; empty on QNAP
 }
 
 // Skipped is a configured volume that will not be scanned.

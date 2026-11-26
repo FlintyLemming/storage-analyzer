@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
@@ -104,9 +105,17 @@ func (p *pather) path(parent int64, name []byte, display bool) (string, bool) {
 		prefix = rt.Name
 	}
 	if r != "" {
-		return prefix + "/" + r + "/" + string(name), true
+		return join(join(prefix, r), string(name)), true
 	}
-	return prefix + "/" + string(name), true
+	return join(prefix, string(name)), true
+}
+
+// join appends name to dir, avoiding a doubled slash when dir ends in "/".
+func join(dir, name string) string {
+	if strings.HasSuffix(dir, "/") {
+		return dir + name
+	}
+	return dir + "/" + name
 }
 
 // Run checks one scan for duplicates and writes the listed groups to o.Out.

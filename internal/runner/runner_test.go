@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ func fakeVolumes(t *testing.T) func() ([]volumes.Volume, []volumes.Skipped, erro
 	os.WriteFile(filepath.Join(v2, "dir", "b.bin"), make([]byte, 100), 0o644)
 	return func() ([]volumes.Volume, []volumes.Skipped, error) {
 		return []volumes.Volume{
-				{Name: "DataVol1", Pool: "1", Device: "/dev/x1", MountPoint: v1},
+				{Name: "DataVol1", Pool: "1", Device: "/dev/x1", MountPoint: v1, FSType: "ext4"},
 				{Name: "DataVol2", Pool: "2", Device: "/dev/x2", MountPoint: v2},
 			},
 			[]volumes.Skipped{{Name: "Locked", Reason: "not_mounted"}}, nil
@@ -78,6 +79,12 @@ func TestRunProducesDoneScan(t *testing.T) {
 	}
 	if vols[0].EntryID != 1 || vols[0].Pool != "1" || vols[0].FSTotal == 0 {
 		t.Fatalf("vols[0] = %+v", vols[0])
+	}
+	if vols[0].FSType != "ext4" || !strings.Contains(meta[MetaVolumes], `"fsType":"ext4"`) {
+		t.Fatalf("fsType not carried: %q", meta[MetaVolumes])
+	}
+	if vols[1].FSType != "" || strings.Count(meta[MetaVolumes], "fsType") != 1 {
+		t.Fatalf("empty fsType should be omitted: %q", meta[MetaVolumes])
 	}
 	var skipped []volumes.Skipped
 	if err := json.Unmarshal([]byte(meta[MetaSkipped]), &skipped); err != nil || len(skipped) != 1 {

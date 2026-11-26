@@ -69,6 +69,7 @@ type VolumeMeta struct {
 	Pool       string `json:"pool"`
 	Device     string `json:"device"`
 	MountPoint string `json:"mountPoint"`
+	FSType     string `json:"fsType,omitempty"`
 	FSTotal    uint64 `json:"fsTotal"`
 	FSUsed     uint64 `json:"fsUsed"`
 	FSFree     uint64 `json:"fsFree"`
@@ -257,7 +258,7 @@ func runScan(ctx context.Context, o Options, lock *os.File) (int64, error) {
 	vm := make([]VolumeMeta, len(vols))
 	var totalD, totalA int64
 	for i, v := range vols {
-		vm[i] = VolumeMeta{EntryID: int64(i + 1), Name: v.Name, Pool: v.Pool, Device: v.Device, MountPoint: v.MountPoint}
+		vm[i] = VolumeMeta{EntryID: int64(i + 1), Name: v.Name, Pool: v.Pool, Device: v.Device, MountPoint: v.MountPoint, FSType: v.FSType}
 		var st syscall.Statfs_t
 		if syscall.Statfs(v.MountPoint, &st) == nil {
 			bs := uint64(st.Bsize)

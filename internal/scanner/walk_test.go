@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -261,5 +262,27 @@ func TestWalkSinkError(t *testing.T) {
 	err := (&Walker{}).Walk(context.Background(), []Root{{Name: "Vol", Path: root}}, &failSink{})
 	if err == nil || err.Error() != "disk full" {
 		t.Fatalf("err = %v, want disk full", err)
+	}
+}
+
+func TestWalkRootSlashPaths(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "etc", "sub", "f"), 10)
+	var mu sync.Mutex
+	var seen []string
+	w := &Walker{IsMountPoint: func(path string, rootDev, dev uint64) bool {
+		mu.Lock()
+		seen = append(seen, path)
+		mu.Unlock()
+		return false
+	}}
+	walk(t, w, Root{Name: "/", Path: dir + "/"})
+	if len(seen) == 0 {
+		t.Fatal("IsMountPoint never called")
+	}
+	for _, p := range seen {
+		if strings.Contains(p, "//") {
+			t.Errorf("path %q contains //", p)
+		}
 	}
 }

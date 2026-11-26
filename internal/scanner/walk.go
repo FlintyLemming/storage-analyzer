@@ -10,6 +10,7 @@ package scanner
 import (
 	"context"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -234,7 +235,7 @@ func (k *walkState) list(n *dirNode) {
 	var subdirs []*dirNode
 	var dsum, asum int64
 	for i, name := range names {
-		p := n.path + "/" + name
+		p := join(n.path, name)
 		e := scandb.Entry{ID: first + int64(i), Parent: n.id, Name: []byte(name)}
 		e.Flags = nameFlags(e.Name)
 		var st syscall.Stat_t
@@ -328,4 +329,12 @@ func (k *walkState) finishListing(n *dirNode) {
 		}
 		n = p
 	}
+}
+
+// join appends name to dir, avoiding a doubled slash when dir ends in "/".
+func join(dir, name string) string {
+	if strings.HasSuffix(dir, "/") {
+		return dir + name
+	}
+	return dir + "/" + name
 }

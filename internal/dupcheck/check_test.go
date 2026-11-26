@@ -136,3 +136,23 @@ func TestCheckCanceledRemovesTmp(t *testing.T) {
 		}
 	}
 }
+
+func TestPatherRootSlash(t *testing.T) {
+	p := &pather{
+		dirs: map[int64]DirInfo{
+			1: {Parent: 0, Name: []byte("/")},
+			2: {Parent: 1, Name: []byte("etc")},
+		},
+		roots:  map[int64]Root{1: {Name: "/", MountPoint: "/"}},
+		memo:   map[int64]string{},
+		rootOf: map[int64]int64{},
+	}
+	for _, display := range []bool{false, true} {
+		if got, ok := p.path(2, []byte("passwd"), display); !ok || got != "/etc/passwd" {
+			t.Errorf("display=%v: got %q %v", display, got, ok)
+		}
+		if got, ok := p.path(1, []byte("x"), display); !ok || got != "/x" {
+			t.Errorf("display=%v: got %q %v", display, got, ok)
+		}
+	}
+}
