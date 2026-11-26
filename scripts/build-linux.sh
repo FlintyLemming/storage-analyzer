@@ -35,7 +35,13 @@ echo "$TARGETS" | while read -r goarch goarm tarch narch darch rarch; do
 		packaging/linux/install.sh packaging/linux/uninstall.sh \
 		packaging/linux/README.md LICENSE "$dir/"
 	chmod 755 "$dir/install.sh" "$dir/uninstall.sh"
-	COPYFILE_DISABLE=1 tar --uid 0 --gid 0 --numeric-owner -C "$OUT/stage" -czf "$OUT/$name.tar.gz" "$name"
+	# GNU tar and bsdtar spell the owner flags differently.
+	if tar --version 2>/dev/null | grep -q 'GNU tar'; then
+		set -- --owner=0 --group=0 --numeric-owner
+	else
+		set -- --uid 0 --gid 0 --numeric-owner
+	fi
+	COPYFILE_DISABLE=1 tar "$@" -C "$OUT/stage" -czf "$OUT/$name.tar.gz" "$name"
 
 	for pkgr in deb rpm; do
 		case $pkgr in
