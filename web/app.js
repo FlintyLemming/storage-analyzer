@@ -1,6 +1,8 @@
 (() => {
   'use strict';
 
+  const SKIP_REASONS = new Set(['not_mounted', 'not_share_volume', 'not_found', 'not_directory']);
+  const LINUX = I18N.platform === 'linux';
   const KIND = { FILE: 0, DIR: 1, SYMLINK: 2, OTHER: 3, MOUNT: 4 };
   const FLAG = { ERROR: 1, HARDLINK_DUP: 2, BAD_NAME: 4 };
   const PAGE = 500;
@@ -15,6 +17,7 @@
       if (k === 'class') n.className = v;
       else if (k === 'text') n.textContent = v;
       else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+      else if (k === 'style') n.style.cssText = v;
       else n.setAttribute(k, v === true ? '' : v);
     }
     for (const c of kids.flat()) if (c !== null && c !== undefined && c !== false) n.append(c);
@@ -79,7 +82,7 @@
 
   // ---------- API ----------
   class ApiError extends Error {
-    constructor(status, code, message) { super(message || code); this.status = status; this.code = code; }
+    constructor(status, code, message, data) { super(message || code); this.status = status; this.code = code; this.data = data; }
   }
   async function api(action, params = {}, opts = {}) {
     const qs = new URLSearchParams({ action, ...params });
@@ -102,16 +105,17 @@
     if (text) {
       try { data = JSON.parse(text); } catch { throw new ApiError(res.status, 'bad_response', t('net.badResponse')); }
     }
-    if (!res.ok) throw new ApiError(res.status, data && data.error, errorText(data));
+    if (!res.ok) throw new ApiError(res.status, data && data.error, errorText(data), data);
     return data;
   }
 
   // errorText shows a known API error code in the UI language; the server's
   // own message is the fallback and fills {detail} where one is expected.
   const ERROR_CODES = new Set(['not_logged_in', 'not_admin', 'auth_unavailable', 'task_running', 'not_running',
-    'scan_running', 'scan_not_found', 'no_scans', 'dir_not_found', 'invalid_settings', 'internal']);
+    'scan_running', 'scan_not_found', 'no_scans', 'dir_not_found', 'invalid_settings', 'internal', 'bad_password']);
   function errorText(data) {
     if (!data) return undefined;
+    if (data.error === 'too_many_attempts') return t('err.too_many_attempts', { min: Math.max(1, Math.ceil((data.retryAfter || 60) / 60)) });
     if (ERROR_CODES.has(data.error)) return t('err.' + data.error, { detail: data.message || '' });
     return data.message;
   }
@@ -279,7 +283,7 @@
       const pct = (x) => (total ? Math.min(100, (x / total) * 100) : 0) + '%';
       box.append(el('div', { class: 'vol' },
         el('div', { class: 'vol-head' },
-          el('div', { class: 'vol-name' }, v.name, el('small', { text: v.pool ? t('vol.poolMount', { pool: String(v.pool), mount: v.mountPoint }) : v.mountPoint })),
+          el('div', { class: 'vol-name' }, v.name, el('small', { text: v.fsType ? t('vol.fsDev', { fstype: v.fsType, device: v.device || '' }) : v.pool ? t('vol.poolMount', { pool: String(v.pool), mount: v.mountPoint }) : v.mountPoint })),
           el('div', { class: 'vol-cap', text: total ? t('vol.cap', { used: fmtSize(used), total: fmtSize(total), pct: ((used / total) * 100).toFixed(1) }) : '' })),
         el('div', { class: 'cap', title: t('vol.bar.title') },
           el('span', { class: 's', style: `width:${pct(Math.min(scanned, used || scanned))}` }),
@@ -290,7 +294,7 @@
           el('span', {}, el('i', { style: 'background:var(--free)' }), t('vol.free', { size: fmtSize(v.fsFree) })))));
     }
     if (state.skipped.length) {
-      const why = (reason) => (reason === 'not_mounted' || reason === 'not_share_volume' ? t('skip.' + reason) : reason);
+      const why = (reason) => (SKIP_REASONS.has(reason) ? t('skip.' + reason) : reason);
       const list = state.skipped.map((s) => t('skip.item', { name: s.name, why: why(s.reason) })).join(t('skip.sep'));
       box.append(el('div', { class: 'notice', text: t('skip.list', { list }) }));
     }
@@ -378,8 +382,50 @@
       el('button', { class: 'btn primary', type: 'button', text: t('empty.start'), onclick: startScan }));
   }
 
+  const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+  // Linux build: password sign-in form in the main content area.
+  function showLogin() {
+    for (const id of ['progress', 'dupBar', 'dupWrap', 'volumes']) $(id).classList.add('hidden');
+    document.querySelector('.toolbar').classList.add('hidden');
+    $('crumbs').replaceChildren();
+    $('dirSummary').textContent = '';
+    $('list').classList.add('hidden');
+    $('moreWrap').classList.add('hidden');
+    $('listWrap').classList.remove('hidden');
+    const input = el('input', { type: 'password', id: 'loginPassword', class: 'login-input', autocomplete: 'current-password', autofocus: true, required: true });
+    const err = el('p', { class: 'login-error hidden', role: 'alert' });
+    const submit = el('button', { class: 'btn primary', type: 'submit', text: t('login.submit') });
+    const form = el('form', { class: 'login' },
+      el('h3', { text: t('login.h') }),
+      el('label', { for: 'loginPassword', text: t('login.password') }),
+      input, err, submit);
+    if (location.protocol === 'http:' && !LOCAL_HOSTS.has(location.hostname)) {
+      form.append(el('p', { class: 'login-insecure', text: t('login.insecure') }));
+    }
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      submit.disabled = true;
+      err.classList.add('hidden');
+      try {
+        await api('login', {}, { method: 'POST', body: { password: input.value } });
+        location.reload();
+        return;
+      } catch (e) {
+        err.textContent = e.message || t('opFailed');
+        err.classList.remove('hidden');
+        input.select();
+      }
+      submit.disabled = false;
+    });
+    const s = $('state');
+    s.replaceChildren(form);
+    s.classList.remove('hidden');
+    input.focus();
+  }
+
   function showError(e) {
-    if (e.status === 401) return showState(t('auth.h'), t('auth.p'));
+    if (e.status === 401) return LINUX ? showLogin() : showState(t('auth.h'), t('auth.p'));
     if (e.status === 403 && e.code === 'not_admin') return showState(t('admin.h'), t('admin.p'));
     toast(e.message || t('opFailed'));
   }
@@ -896,6 +942,13 @@
     $('btnCancel').addEventListener('click', cancelScan);
     $('btnHistory').addEventListener('click', showHistory);
     $('btnSettings').addEventListener('click', showSettings);
+    if (LINUX) {
+      $('btnLogout').classList.remove('hidden');
+      $('btnLogout').addEventListener('click', async () => {
+        try { await api('logout', {}, { method: 'POST' }); } catch { /* reload shows the login page anyway */ }
+        location.reload();
+      });
+    }
     $('btnMore').addEventListener('click', loadMore);
     $('dlgClose').addEventListener('click', closeDialog);
     $('overlay').addEventListener('click', (e) => { if (e.target === $('overlay')) closeDialog(); });

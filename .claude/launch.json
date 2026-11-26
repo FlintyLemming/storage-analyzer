@@ -9,6 +9,15 @@
         "mkdir -p build/dev && printf 'data_dir = %s/build/dev/data\\npaths = %s/Projects\\n' \"$PWD\" \"$HOME\" > build/dev/config && go build -o build/dev/bin/storage-analyzer ./cmd/storage-analyzer && exec build/dev/bin/storage-analyzer serve --config build/dev/config --insecure-no-auth --web web"
       ],
       "port": 8099
+    },
+    {
+      "name": "storage-analyzer-dev-auth",
+      "runtimeExecutable": "/bin/sh",
+      "runtimeArgs": [
+        "-c",
+        "mkdir -p build/dev-auth && printf 'listen = 127.0.0.1:8098\\ndata_dir = %s/build/dev-auth/data\\npaths = %s/Projects\\n' \"$PWD\" \"$HOME\" > build/dev-auth/config && go build -o build/dev/bin/storage-analyzer ./cmd/storage-analyzer && { [ -e build/dev-auth/password ] || printf 'devpassword-12\\n' | build/dev/bin/storage-analyzer passwd --config build/dev-auth/config; } && exec build/dev/bin/storage-analyzer serve --config build/dev-auth/config"
+      ],
+      "port": 8098
     }
   ]
 }

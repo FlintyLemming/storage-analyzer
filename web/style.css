@@ -216,3 +216,14 @@ tr.member-note td { color: var(--muted); font-size: 12px; padding-left: 36px; }
   .form .row { grid-template-columns: 1fr; }
   .hint { margin-left: 0; }
 }
+
+/* Linux sign-in form and unencrypted-connection notice */
+.state .login { width: 100%; max-width: 320px; margin: 40px auto; display: flex; flex-direction: column; gap: 10px; text-align: left; }
+.login h3 { margin: 0 0 6px; }
+.login-input {
+  height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: var(--radius);
+  font: inherit; color: var(--text); background: #fff;
+}
+.login-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.state .login .login-error { margin: 0; max-width: none; color: var(--danger); font-size: 13px; }
+.state .login .login-insecure { margin: 6px 0 0; max-width: none; color: var(--warn); font-size: 12px; line-height: 1.5; }

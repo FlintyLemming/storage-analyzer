@@ -64,6 +64,7 @@
     'tb.newScan': '新建扫描',
     'tb.history': '历史',
     'tb.settings': '设置',
+    'tb.logout': '退出登录',
     'tb.view': '视图',
     'tb.sizeMode': '大小显示方式',
     'view.space': '空间占用',
@@ -117,6 +118,8 @@
     'err.dir_not_found': '目录不存在',
     'err.invalid_settings': '设置无效：{detail}',
     'err.internal': '内部错误：{detail}',
+    'err.bad_password': '密码不正确',
+    'err.too_many_attempts': '尝试次数过多，请 {min} 分钟后再试',
 
     // scan picker & navigation
     'scans.none': '暂无扫描结果',
@@ -128,6 +131,7 @@
 
     // volume cards
     'vol.poolMount': '存储池 {pool} · {mount}',
+    'vol.fsDev': '{fstype} · {device}',
     'vol.cap': '已用 {used} / {total}（{pct}%）',
     'vol.bar.title': '蓝色：扫描到的文件；橙色：未计入的已用空间；灰色：可用空间',
     'vol.scanned': '扫描到的文件 {size}',
@@ -136,6 +140,8 @@
     'vol.free': '可用 {size}',
     'skip.not_mounted': '未挂载（可能是未解锁的加密卷）',
     'skip.not_share_volume': '不是数据卷',
+    'skip.not_found': '路径不存在',
+    'skip.not_directory': '不是目录',
     'skip.item': '{name}（{why}）',
     'skip.list': '已跳过：{list}',
     'skip.sep': '，',
@@ -159,6 +165,10 @@
     'auth.p': '登录已过期，请刷新 QTS 页面后重新打开 Storage Analyzer。',
     'admin.h': '需要管理员权限',
     'admin.p': 'Storage Analyzer 可以看到所有用户的文件名，只有管理员可以使用。',
+    'login.h': '登录',
+    'login.password': '密码',
+    'login.submit': '登录',
+    'login.insecure': '连接未加密，建议只在局域网或 Tailscale 内使用，或者放到反向代理后面。',
 
     // scanning
     'scan.started': '扫描已开始',
@@ -263,6 +273,23 @@
     'dup.errorsShort': '读取出错 {n}',
   };
 
+  // Wording for the generic Linux build (<html data-platform="linux">, set by
+  // the server): same keys as above, with "NAS" / "QTS" replaced.
+  const zhLinux = {
+    'net.down': '无法连接到服务器',
+    'net.badResponse': '服务返回了无法识别的内容',
+    'err.not_logged_in': '请先登录',
+    'empty.running.p': '扫描完成后会自动显示结果。扫描以最低优先级运行，不会影响服务器的正常使用。',
+    'empty.p': '扫描会统计本机所有磁盘文件系统的空间占用，文件较多时需要几分钟到几十分钟。',
+    'auth.h': '请先登录',
+    'auth.p': '登录已过期或尚未登录，请使用密码登录。',
+    'del.p': '确定删除 {time} 的扫描记录吗？此操作只删除扫描结果，不会影响服务器上的任何文件。',
+    'set.timeHint': '按服务器本地时间执行，建议选择夜间空闲时段。',
+    'set.dupHint': '首次检查可能要几个小时，之后通常几分钟到几十分钟；期间服务器硬盘会比较忙。',
+    'dup.checking.p': '检查完成后会自动显示结果。检查以最低优先级运行，不影响服务器的正常使用；可以随时取消，已经算过的文件下次不会重读。',
+    'dup.intro': '重复检查会读取大小相同的文件的内容，并用完整的校验值确认是否完全相同。第一次检查可能需要数小时，以最低优先级运行，不影响服务器的正常使用；之后再检查只会读取新增或改动过的文件。',
+  };
+
   const en = {
     'app.title': 'Storage Analyzer',
 
@@ -271,6 +298,7 @@
     'tb.newScan': 'New scan',
     'tb.history': 'History',
     'tb.settings': 'Settings',
+    'tb.logout': 'Sign out',
     'tb.view': 'View',
     'tb.sizeMode': 'Size to show',
     'view.space': 'Space',
@@ -322,6 +350,8 @@
     'err.dir_not_found': 'Folder not found',
     'err.invalid_settings': 'Invalid settings: {detail}',
     'err.internal': 'Internal error: {detail}',
+    'err.bad_password': 'Incorrect password',
+    'err.too_many_attempts': 'Too many attempts. Try again in {min} min.',
 
     'scans.none': 'No scan results',
     'notice.scanDeleted': 'That scan result was deleted. Showing the latest one.',
@@ -331,6 +361,7 @@
     'row.up': '.. Up one level',
 
     'vol.poolMount': 'Storage pool {pool} · {mount}',
+    'vol.fsDev': '{fstype} · {device}',
     'vol.cap': '{used} of {total} used ({pct}%)',
     'vol.bar.title': 'Blue: scanned files. Orange: used space not accounted for. Grey: free space.',
     'vol.scanned': 'Scanned files {size}',
@@ -339,6 +370,8 @@
     'vol.free': 'Free {size}',
     'skip.not_mounted': 'not mounted (possibly a locked encrypted volume)',
     'skip.not_share_volume': 'not a data volume',
+    'skip.not_found': 'path not found',
+    'skip.not_directory': 'not a directory',
     'skip.item': '{name} ({why})',
     'skip.list': 'Skipped: {list}',
     'skip.sep': ', ',
@@ -360,6 +393,10 @@
     'auth.p': 'Your session has expired. Reload QTS and open Storage Analyzer again.',
     'admin.h': 'Administrator access required',
     'admin.p': "Storage Analyzer can see every user's file names, so only administrators can use it.",
+    'login.h': 'Sign in',
+    'login.password': 'Password',
+    'login.submit': 'Sign in',
+    'login.insecure': "This connection isn't encrypted. Use it only on your LAN or Tailscale, or put it behind a reverse proxy.",
 
     'scan.started': 'Scan started',
     'scan.done': (p) => `Scan finished: ${p.size}, ${pl(p.files, 'file', 'files')}, took ${p.dur}`,
@@ -462,7 +499,25 @@
     'dup.errorsShort': (p) => pl(p.n, 'read error', 'read errors'),
   };
 
-  const dict = lang === 'zh' ? zh : en;
+  const enLinux = {
+    'net.down': "Can't reach the server",
+    'net.badResponse': "The server sent a response the app couldn't read",
+    'err.not_logged_in': 'Please sign in',
+    'empty.running.p': "Results appear here when the scan finishes. Scans run at the lowest priority, so they won't slow down the server.",
+    'empty.p': 'A scan measures the space used on every local disk file system. With many files it can take from a few minutes to an hour or so.',
+    'auth.h': 'Please sign in',
+    'auth.p': 'You are not signed in, or your session has expired. Sign in with your password.',
+    'del.p': 'Delete the scan from {time}? This only deletes the scan result. No files on the server are touched.',
+    'set.timeHint': "Runs on the server's local time. Pick a quiet time, such as overnight.",
+    'set.dupHint': 'The first check can take a few hours; later ones usually take minutes to an hour. The server disks stay busy while it runs.',
+    'dup.checking.p': "Results appear here when the check finishes. It runs at the lowest priority, so it won't slow down the server. You can cancel at any time; files already hashed won't be read again.",
+    'dup.intro': "A duplicate check reads the content of files that have the same size and compares full checksums to confirm they're identical. The first check can take hours. It runs at the lowest priority, so it won't slow down the server, and later checks only read new or changed files.",
+  };
+
+  const platform = document.documentElement.dataset.platform === 'linux' ? 'linux' : 'qnap';
+  const dict = platform === 'linux'
+    ? Object.assign({}, lang === 'zh' ? zh : en, lang === 'zh' ? zhLinux : enLinux)
+    : (lang === 'zh' ? zh : en);
 
   // t looks up a string and fills {name} placeholders from params; numbers
   // are formatted for the locale. Entries may also be functions of params
@@ -488,5 +543,5 @@
     for (const n of root.querySelectorAll('[data-i18n-aria-label]')) n.setAttribute('aria-label', t(n.dataset.i18nAriaLabel));
   }
 
-  window.I18N = { lang, locale, t, num, apply, _dicts: { zh, en } };
+  window.I18N = { lang, locale, platform, t, num, apply, _dicts: { zh, en, zhLinux, enLinux } };
 })();
