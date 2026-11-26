@@ -121,7 +121,16 @@ func (l *Login) login(w http.ResponseWriter, r *http.Request) {
 
 	now := l.Now()
 	ip := ClientIP(r, l.Trusted)
+
+	// Allow, verification and Fail/Succeed all happen under the semaphore, so
+	// a parallel burst cannot get past the lockout before failures are counted.
+	select {
+	case l.sem <- struct{}{}:
+	case <-r.Context().Done():
+		return
+	}
 	if retry, ok := l.Limiter.Allow(ip, now); !ok {
+		<-l.sem
 		secs := int(math.Ceil(retry.Seconds()))
 		if secs < 1 {
 			secs = 1
@@ -134,26 +143,25 @@ func (l *Login) login(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-
-	select {
-	case l.sem <- struct{}{}:
-	case <-r.Context().Done():
-		return
-	}
 	phc, err := l.Password.Current()
 	var ok bool
 	if err == nil {
 		ok, err = Verify(phc, *req.Password)
 	}
-	<-l.sem
 	if err != nil {
+		<-l.sem
 		log.Printf("login: %v", err)
 		writeErr(w, http.StatusInternalServerError, "internal", "internal error")
 		return
 	}
-
 	if !ok {
 		l.Limiter.Fail(ip, now)
+	} else {
+		l.Limiter.Succeed(ip)
+	}
+	<-l.sem
+
+	if !ok {
 		log.Printf("login failed from %s", ip)
 		if l.FailDelay > 0 {
 			t := time.NewTimer(l.FailDelay)
@@ -168,7 +176,6 @@ func (l *Login) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	l.Limiter.Succeed(ip)
 	tok, err := l.Sessions.Create(Fingerprint(phc), now)
 	if err != nil {
 		log.Printf("login: create session: %v", err)

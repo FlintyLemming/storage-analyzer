@@ -230,3 +230,21 @@ func TestLoginUnknownAction(t *testing.T) {
 		t.Fatalf("%d", w.Code)
 	}
 }
+
+func TestLoginParallelLockout(t *testing.T) {
+	l, _ := newTestLogin(t)
+	log.SetOutput(&bytes.Buffer{})
+	defer log.SetOutput(os.Stderr)
+	const n = 20
+	codes := make(chan int, n)
+	for i := 0; i < n; i++ {
+		go func() { codes <- doLogin(l, "wrong password!!", nil).Code }()
+	}
+	got := map[int]int{}
+	for i := 0; i < n; i++ {
+		got[<-codes]++
+	}
+	if got[401] > 5 || got[401]+got[429] != n {
+		t.Fatalf("status counts %v", got)
+	}
+}
