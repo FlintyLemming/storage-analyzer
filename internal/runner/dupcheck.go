@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"storage-analyzer/internal/catalog"
-	"storage-analyzer/internal/dupcheck"
-	"storage-analyzer/internal/scandb"
+	"github.com/FlintyLemming/storage-analyzer/internal/catalog"
+	"github.com/FlintyLemming/storage-analyzer/internal/dupcheck"
+	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
 )
 
 // ErrScanNotFound means the scan to check does not exist or is not done.

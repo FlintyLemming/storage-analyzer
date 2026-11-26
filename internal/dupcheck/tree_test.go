@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"storage-analyzer/internal/scandb"
+	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
 )
 
 // treeB builds an in-memory scan tree. Ids grow in creation order, so a

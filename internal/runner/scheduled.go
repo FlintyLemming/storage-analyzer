@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"storage-analyzer/internal/catalog"
-	"storage-analyzer/internal/dupcheck"
+	"github.com/FlintyLemming/storage-analyzer/internal/catalog"
+	"github.com/FlintyLemming/storage-analyzer/internal/dupcheck"
 )
 
 // ScheduledRun is what RunScheduled did.

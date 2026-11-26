@@ -1,4 +1,4 @@
-module storage-analyzer
+module github.com/FlintyLemming/storage-analyzer
 
 go 1.26.5
 

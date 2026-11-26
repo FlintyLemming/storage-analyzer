@@ -14,11 +14,11 @@ import (
 	"syscall"
 	"time"
 
-	"storage-analyzer/internal/catalog"
-	"storage-analyzer/internal/dupcheck"
-	"storage-analyzer/internal/scandb"
-	"storage-analyzer/internal/scanner"
-	"storage-analyzer/internal/volumes"
+	"github.com/FlintyLemming/storage-analyzer/internal/catalog"
+	"github.com/FlintyLemming/storage-analyzer/internal/dupcheck"
+	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
+	"github.com/FlintyLemming/storage-analyzer/internal/scanner"
+	"github.com/FlintyLemming/storage-analyzer/internal/volumes"
 )
 
 // Meta keys written into every scan database.

@@ -24,12 +24,12 @@ import (
 	"syscall"
 	"time"
 
-	"storage-analyzer/internal/api"
-	"storage-analyzer/internal/catalog"
-	"storage-analyzer/internal/dupcheck"
-	"storage-analyzer/internal/runner"
-	"storage-analyzer/internal/schedule"
-	"storage-analyzer/internal/volumes"
+	"github.com/FlintyLemming/storage-analyzer/internal/api"
+	"github.com/FlintyLemming/storage-analyzer/internal/catalog"
+	"github.com/FlintyLemming/storage-analyzer/internal/dupcheck"
+	"github.com/FlintyLemming/storage-analyzer/internal/runner"
+	"github.com/FlintyLemming/storage-analyzer/internal/schedule"
+	"github.com/FlintyLemming/storage-analyzer/internal/volumes"
 )
 
 const crontabPath = "/etc/config/crontab"

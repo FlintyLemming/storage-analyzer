@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"storage-analyzer/internal/catalog"
-	"storage-analyzer/internal/dupcheck"
-	"storage-analyzer/internal/runner"
-	"storage-analyzer/internal/scandb"
+	"github.com/FlintyLemming/storage-analyzer/internal/catalog"
+	"github.com/FlintyLemming/storage-analyzer/internal/dupcheck"
+	"github.com/FlintyLemming/storage-analyzer/internal/runner"
+	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
 )
 
 type fakeAuth struct {
@@ -42,8 +42,11 @@ func newEnv(t *testing.T, auth Authenticator) *env {
 	os.WriteFile(e.cron, []byte("0 0 * * * /sbin/auto_update\n"), 0o644)
 	e.h = New(Config{
 		DataDir: e.data, BinPath: "/qpkg/bin/storage-analyzer", CrontabPath: e.cron, Auth: auth,
-		Spawn:  func(args ...string) error { e.spawned = append(e.spawned, args); return nil },
-		RunCmd: func(name string, args ...string) error { e.ran = append(e.ran, name+" "+strings.Join(args, " ")); return nil },
+		Spawn: func(args ...string) error { e.spawned = append(e.spawned, args); return nil },
+		RunCmd: func(name string, args ...string) error {
+			e.ran = append(e.ran, name+" "+strings.Join(args, " "))
+			return nil
+		},
 	})
 	return e
 }

@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"storage-analyzer/internal/scandb"
+	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
 )
 
 // Root maps a volume root entry to where it is mounted now.

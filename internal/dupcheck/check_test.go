@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"storage-analyzer/internal/scandb"
-	"storage-analyzer/internal/scanner"
+	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
+	"github.com/FlintyLemming/storage-analyzer/internal/scanner"
 )
 
 func put(t *testing.T, p string, content []byte) {

@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"testing"
 
-	"storage-analyzer/internal/scandb"
+	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
 )
 
 type memSink struct {

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"storage-analyzer/internal/catalog"
-	"storage-analyzer/internal/dupcheck"
-	"storage-analyzer/internal/volumes"
+	"github.com/FlintyLemming/storage-analyzer/internal/catalog"
+	"github.com/FlintyLemming/storage-analyzer/internal/dupcheck"
+	"github.com/FlintyLemming/storage-analyzer/internal/volumes"
 )
 
 // dupVolume is one volume holding two identical files.

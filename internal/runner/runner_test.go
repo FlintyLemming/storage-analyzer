@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"storage-analyzer/internal/catalog"
-	"storage-analyzer/internal/scandb"
-	"storage-analyzer/internal/volumes"
+	"github.com/FlintyLemming/storage-analyzer/internal/catalog"
+	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
+	"github.com/FlintyLemming/storage-analyzer/internal/volumes"
 )
 
 func fakeVolumes(t *testing.T) func() ([]volumes.Volume, []volumes.Skipped, error) {

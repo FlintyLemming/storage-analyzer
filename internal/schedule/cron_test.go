@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"storage-analyzer/internal/catalog"
+	"github.com/FlintyLemming/storage-analyzer/internal/catalog"
 )
 
 const bin = "/share/CACHEDEV2_DATA/.qpkg/StorageAnalyzer/bin/storage-analyzer"

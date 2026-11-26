@@ -16,7 +16,7 @@ import (
 	"math"
 	"slices"
 
-	"storage-analyzer/internal/scandb"
+	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
 )
 
 // Digest is a SHA-256 sum.

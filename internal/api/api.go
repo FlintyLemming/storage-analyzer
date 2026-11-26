@@ -14,11 +14,11 @@ import (
 	"syscall"
 	"unicode/utf8"
 
-	"storage-analyzer/internal/catalog"
-	"storage-analyzer/internal/dupcheck"
-	"storage-analyzer/internal/runner"
-	"storage-analyzer/internal/scandb"
-	"storage-analyzer/internal/schedule"
+	"github.com/FlintyLemming/storage-analyzer/internal/catalog"
+	"github.com/FlintyLemming/storage-analyzer/internal/dupcheck"
+	"github.com/FlintyLemming/storage-analyzer/internal/runner"
+	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
+	"github.com/FlintyLemming/storage-analyzer/internal/schedule"
 )
 
 // Config wires the handler to the filesystem and the outside world.

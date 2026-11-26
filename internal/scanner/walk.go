@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"unicode/utf8"
 
-	"storage-analyzer/internal/scandb"
+	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
 )
 
 // Sink receives entries. Walk calls Add from a single goroutine.

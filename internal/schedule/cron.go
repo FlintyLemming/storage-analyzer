@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"storage-analyzer/internal/catalog"
+	"github.com/FlintyLemming/storage-analyzer/internal/catalog"
 )
 
 // Tag marks the line this app owns in /etc/config/crontab.
