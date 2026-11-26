@@ -1,0 +1,7 @@
+22 28 0:21 / /proc rw,nosuid,nodev,noexec,relatime shared:12 - proc proc rw
+23 28 0:22 / /sys rw,nosuid,nodev,noexec,relatime shared:2 - sysfs sysfs rw
+28 1 0:40 / / rw,relatime shared:1 - zfs rpool/ROOT/pve-1 rw,xattr,noacl
+41 28 0:41 / /rpool rw,noatime shared:50 - zfs rpool rw,xattr,noacl
+42 41 0:42 / /rpool/data rw,noatime shared:51 - zfs rpool/data rw,xattr,noacl
+43 42 0:43 / /rpool/data/subvol-100-disk-0 rw,noatime shared:52 - zfs rpool/data/subvol-100-disk-0 rw,xattr,posixacl
+44 28 0:44 / /run rw,nosuid,nodev,noexec,relatime shared:5 - tmpfs tmpfs rw,size=1600000k,mode=755

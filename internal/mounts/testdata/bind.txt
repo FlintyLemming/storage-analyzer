@@ -1,0 +1,4 @@
+28 1 8:2 / / rw,relatime shared:1 - ext4 /dev/sda2 rw
+50 28 8:17 / /mnt/data rw,relatime shared:20 - xfs /dev/sdb1 rw,attr2,inode64,noquota
+51 28 8:17 / /data rw,relatime shared:20 - xfs /dev/sdb1 rw,attr2,inode64,noquota
+52 28 8:17 /srv /srv rw,relatime shared:20 - xfs /dev/sdb1 rw,attr2,inode64,noquota

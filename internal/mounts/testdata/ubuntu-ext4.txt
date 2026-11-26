@@ -1,0 +1,11 @@
+22 28 0:21 / /proc rw,nosuid,nodev,noexec,relatime shared:12 - proc proc rw
+23 28 0:22 / /sys rw,nosuid,nodev,noexec,relatime shared:2 - sysfs sysfs rw
+24 28 0:5 / /dev rw,nosuid,relatime shared:8 - devtmpfs udev rw,size=4012000k,nr_inodes=1003000,mode=755
+25 24 0:23 / /dev/pts rw,nosuid,noexec,relatime shared:9 - devpts devpts rw,gid=5,mode=620,ptmxmode=000
+26 28 0:24 / /run rw,nosuid,nodev,noexec,relatime shared:5 - tmpfs tmpfs rw,size=806000k,mode=755
+28 1 8:2 / / rw,relatime shared:1 - ext4 /dev/sda2 rw,errors=remount-ro
+29 22 0:25 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime shared:6 - cgroup2 cgroup2 rw,nsdelegate
+31 28 7:0 / /snap/core22/1380 ro,nodev,relatime shared:14 - squashfs /dev/loop0 ro,errors=continue
+32 28 7:1 / /snap/snapd/21184 ro,nodev,relatime shared:15 - squashfs /dev/loop1 ro,errors=continue
+33 28 0:26 / /dev/shm rw,nosuid,nodev shared:3 - tmpfs tmpfs rw
+36 28 8:1 / /boot/efi rw,relatime shared:40 - vfat /dev/sda1 rw,fmask=0077,dmask=0077,codepage=437,iocharset=iso8859-1,shortname=mixed,errors=remount-ro

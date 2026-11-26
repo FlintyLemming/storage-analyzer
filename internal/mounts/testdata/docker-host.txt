@@ -1,0 +1,6 @@
+22 28 0:21 / /proc rw,nosuid,nodev,noexec,relatime shared:12 - proc proc rw
+28 1 8:2 / / rw,relatime shared:1 - ext4 /dev/sda2 rw
+60 28 0:50 / /var/lib/docker/overlay2/a1b2c3d4e5f6/merged rw,relatime shared:60 - overlay overlay rw,lowerdir=/var/lib/docker/overlay2/l/AAAA,upperdir=/var/lib/docker/overlay2/a1b2c3d4e5f6/diff,workdir=/var/lib/docker/overlay2/a1b2c3d4e5f6/work
+61 28 0:51 / /var/lib/docker/overlay2/f6e5d4c3b2a1/merged rw,relatime shared:61 - overlay overlay rw,lowerdir=/var/lib/docker/overlay2/l/BBBB,upperdir=/var/lib/docker/overlay2/f6e5d4c3b2a1/diff,workdir=/var/lib/docker/overlay2/f6e5d4c3b2a1/work
+62 28 0:4 net:[4026532600] /run/docker/netns/abcdef012345 rw shared:62 - nsfs nsfs rw
+63 28 0:52 / /var/lib/docker/containers/0123456789ab/mounts/shm rw,nosuid,nodev,noexec,relatime shared:63 - tmpfs shm rw,size=65536k

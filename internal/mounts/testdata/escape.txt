@@ -1,0 +1,2 @@
+28 1 8:2 / / rw,relatime shared:1 - ext4 /dev/sda2 rw
+50 28 8:17 / /mnt/my\040disk rw,relatime shared:20 - ext4 /dev/sdb1 rw

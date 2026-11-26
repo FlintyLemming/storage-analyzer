@@ -1,0 +1,5 @@
+28 1 8:2 / / rw,relatime shared:1 - ext4 /dev/sda2 rw
+70 28 0:60 / /mnt/nas rw,relatime shared:70 - nfs4 192.168.1.10:/export/data rw,vers=4.2,rsize=1048576,wsize=1048576,proto=tcp
+71 28 0:61 / /mnt/smb rw,relatime shared:71 - cifs //192.168.1.10/share rw,vers=3.1.1,cache=strict
+72 28 0:62 / /mnt/gd rw,nosuid,nodev,relatime shared:72 - fuse.rclone gdrive: rw,user_id=1000,group_id=1000
+73 28 8:33 / /media/usb rw,nosuid,nodev,relatime shared:73 - fuseblk /dev/sdc1 rw,user_id=0,group_id=0,allow_other,blksize=4096

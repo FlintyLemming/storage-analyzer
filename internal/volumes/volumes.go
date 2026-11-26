@@ -86,7 +86,7 @@ func ParseMounts(r io.Reader) map[string]string {
 		if len(f) < 2 {
 			continue
 		}
-		dev, mp := unescapeMount(f[0]), unescapeMount(f[1])
+		dev, mp := UnescapeMount(f[0]), UnescapeMount(f[1])
 		if _, seen := m[dev]; !seen {
 			m[dev] = mp
 		}
@@ -94,8 +94,8 @@ func ParseMounts(r io.Reader) map[string]string {
 	return m
 }
 
-// unescapeMount decodes the octal escapes (\040 etc.) used in /proc/mounts.
-func unescapeMount(s string) string {
+// UnescapeMount decodes the octal escapes (\040 etc.) used in /proc/mounts.
+func UnescapeMount(s string) string {
 	if !strings.Contains(s, `\`) {
 		return s
 	}
