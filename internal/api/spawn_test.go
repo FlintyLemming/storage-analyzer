@@ -14,7 +14,7 @@ import (
 // The scan must survive the CGI request: it has to run in its own session.
 func TestSpawnDetachedNewSession(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "pid")
-	if err := spawnDetached("/bin/sh", "-c", "echo $$ > "+pidFile+"; sleep 2"); err != nil {
+	if err := SpawnDetached("/bin/sh", "-c", "echo $$ > "+pidFile+"; sleep 2"); err != nil {
 		t.Fatal(err)
 	}
 	var pid int

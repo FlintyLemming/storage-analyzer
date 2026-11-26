@@ -153,11 +153,11 @@ func Run(ctx context.Context, o Options) (int64, error) {
 
 // runScan performs one scan while the caller holds lock.
 func runScan(ctx context.Context, o Options, lock *os.File) (int64, error) {
+	if o.Discover == nil {
+		return 0, errors.New("runner: Options.Discover is nil")
+	}
 	if o.Now == nil {
 		o.Now = time.Now
-	}
-	if o.Discover == nil {
-		o.Discover = volumes.Discover
 	}
 	lock.Truncate(0)
 	lock.WriteAt([]byte(strconv.Itoa(os.Getpid())), 0)

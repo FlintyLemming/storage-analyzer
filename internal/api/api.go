@@ -18,17 +18,16 @@ import (
 	"github.com/FlintyLemming/storage-analyzer/internal/dupcheck"
 	"github.com/FlintyLemming/storage-analyzer/internal/runner"
 	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
-	"github.com/FlintyLemming/storage-analyzer/internal/schedule"
 )
 
 // Config wires the handler to the filesystem and the outside world.
 type Config struct {
-	DataDir     string
-	BinPath     string
-	CrontabPath string
-	Auth        Authenticator
-	Spawn       func(args ...string) error
-	RunCmd      func(name string, args ...string) error
+	DataDir       string
+	BinPath       string
+	Auth          Authenticator
+	Spawn         func(args ...string) error   // nil: SpawnDetached(BinPath, args...)
+	ApplySchedule func(catalog.Settings) error // called after settings are saved; nil: nothing to do
+	LoginKind     string                       // non-empty: 401 responses carry "auth": LoginKind
 }
 
 // Item is one entry as returned to the UI.
@@ -58,19 +57,13 @@ type handler struct{ cfg Config }
 // New returns the API handler. Requests select an operation with ?action=.
 func New(cfg Config) http.Handler {
 	if cfg.Spawn == nil {
-		cfg.Spawn = func(args ...string) error { return spawnDetached(cfg.BinPath, args...) }
-	}
-	if cfg.RunCmd == nil {
-		cfg.RunCmd = func(name string, args ...string) error { return exec.Command(name, args...).Run() }
-	}
-	if cfg.CrontabPath == "" {
-		cfg.CrontabPath = "/etc/config/crontab"
+		cfg.Spawn = func(args ...string) error { return SpawnDetached(cfg.BinPath, args...) }
 	}
 	return &handler{cfg: cfg}
 }
 
-// spawnDetached starts bin in its own session so it outlives the CGI request.
-func spawnDetached(bin string, args ...string) error {
+// SpawnDetached starts bin in its own session so it outlives the CGI request.
+func SpawnDetached(bin string, args ...string) error {
 	cmd := exec.Command(bin, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Dir = "/"
@@ -104,7 +97,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, admin, err := h.cfg.Auth.Check(r)
 	if err != nil {
 		if errors.Is(err, ErrNotLoggedIn) {
-			fail(w, 401, "not_logged_in", "not logged in to QTS")
+			body := map[string]string{"error": "not_logged_in", "message": "not logged in to QTS"}
+			if h.cfg.LoginKind != "" {
+				body["auth"] = h.cfg.LoginKind
+			}
+			writeJSON(w, 401, body)
 		} else {
 			log.Printf("auth check: %v", err)
 			fail(w, 502, "auth_unavailable", err.Error())
@@ -384,9 +381,11 @@ func (h *handler) settings(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "invalid_settings", err.Error())
 		return
 	}
-	if err := schedule.Apply(s, h.cfg.BinPath, h.cfg.CrontabPath, h.cfg.RunCmd); err != nil {
-		h.internal(w, err)
-		return
+	if h.cfg.ApplySchedule != nil {
+		if err := h.cfg.ApplySchedule(s); err != nil {
+			h.internal(w, err)
+			return
+		}
 	}
 	writeJSON(w, 200, s)
 }

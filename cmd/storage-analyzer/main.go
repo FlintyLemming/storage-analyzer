@@ -104,8 +104,11 @@ func main() {
 	switch cmd {
 	case "cgi":
 		err = cgi.Serve(api.New(api.Config{
-			DataDir: p.data, BinPath: p.bin, CrontabPath: crontabPath,
-			Auth: api.QTSAuth{URL: api.DefaultAuthURL}, RunCmd: runCmd,
+			DataDir: p.data, BinPath: p.bin,
+			Auth: api.QTSAuth{URL: api.DefaultAuthURL},
+			ApplySchedule: func(s catalog.Settings) error {
+				return schedule.Apply(s, p.bin, crontabPath, runCmd)
+			},
 		}))
 	case "scan":
 		err = scan(p, *trigger)
@@ -305,10 +308,13 @@ func serve(p paths, addr, webDir string, noAuth bool) error {
 	}
 	os.MkdirAll(filepath.Join(p.data, "scans"), 0o755)
 	h := api.New(api.Config{
-		DataDir: p.data, BinPath: p.bin, CrontabPath: filepath.Join(p.data, "dev-crontab"),
-		Auth:   allowAll{},
-		Spawn:  func(args ...string) error { return devSpawn(p, args...) },
-		RunCmd: func(name string, args ...string) error { log.Printf("(dev) skip %s %v", name, args); return nil },
+		DataDir: p.data, BinPath: p.bin,
+		Auth:  allowAll{},
+		Spawn: func(args ...string) error { return devSpawn(p, args...) },
+		ApplySchedule: func(s catalog.Settings) error {
+			log.Printf("(dev) skip apply schedule %+v", s)
+			return nil
+		},
 	})
 	mux := http.NewServeMux()
 	mux.Handle("/api.cgi", h)

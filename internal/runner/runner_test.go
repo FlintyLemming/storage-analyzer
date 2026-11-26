@@ -184,3 +184,30 @@ func TestRunningReadsProgress(t *testing.T) {
 		t.Fatalf("got=%+v running=%v err=%v", got, running, err)
 	}
 }
+
+func TestRunNilDiscover(t *testing.T) {
+	data := t.TempDir()
+	for name, run := range map[string]func() error{
+		"Run": func() error {
+			_, err := Run(context.Background(), Options{DataDir: data, Trigger: "manual"})
+			return err
+		},
+		"RunScheduled": func() error {
+			_, err := RunScheduled(context.Background(), Options{DataDir: data})
+			return err
+		},
+	} {
+		err := run()
+		if err == nil || err.Error() != "runner: Options.Discover is nil" {
+			t.Fatalf("%s: err = %v", name, err)
+		}
+	}
+	cat, err := catalog.Open(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cat.Close()
+	if list, _ := cat.List(); len(list) != 0 {
+		t.Fatalf("scan records created: %v", list)
+	}
+}

@@ -32,22 +32,22 @@ type env struct {
 	data    string
 	h       http.Handler
 	spawned [][]string
-	ran     []string
-	cron    string
+	applied []catalog.Settings
 }
 
-func newEnv(t *testing.T, auth Authenticator) *env {
+func newEnv(t *testing.T, auth Authenticator) *env { return newEnvCfg(t, auth, nil) }
+
+func newEnvCfg(t *testing.T, auth Authenticator, mod func(*Config)) *env {
 	e := &env{t: t, data: t.TempDir()}
-	e.cron = filepath.Join(t.TempDir(), "crontab")
-	os.WriteFile(e.cron, []byte("0 0 * * * /sbin/auto_update\n"), 0o644)
-	e.h = New(Config{
-		DataDir: e.data, BinPath: "/qpkg/bin/storage-analyzer", CrontabPath: e.cron, Auth: auth,
-		Spawn: func(args ...string) error { e.spawned = append(e.spawned, args); return nil },
-		RunCmd: func(name string, args ...string) error {
-			e.ran = append(e.ran, name+" "+strings.Join(args, " "))
-			return nil
-		},
-	})
+	cfg := Config{
+		DataDir: e.data, BinPath: "/qpkg/bin/storage-analyzer", Auth: auth,
+		Spawn:         func(args ...string) error { e.spawned = append(e.spawned, args); return nil },
+		ApplySchedule: func(s catalog.Settings) error { e.applied = append(e.applied, s); return nil },
+	}
+	if mod != nil {
+		mod(&cfg)
+	}
+	e.h = New(cfg)
 	return e
 }
 
@@ -106,6 +106,17 @@ func TestAuthRequired(t *testing.T) {
 	e := newEnv(t, fakeAuth{err: ErrNotLoggedIn})
 	rr, m := e.do("GET", "/api.cgi?action=status", "", nil)
 	if rr.Code != 401 || m["error"] != "not_logged_in" {
+		t.Fatalf("code=%d body=%v", rr.Code, m)
+	}
+	if _, ok := m["auth"]; ok {
+		t.Fatalf("unexpected auth key: %v", m)
+	}
+}
+
+func TestAuthRequiredReportsLoginKind(t *testing.T) {
+	e := newEnvCfg(t, fakeAuth{err: ErrNotLoggedIn}, func(c *Config) { c.LoginKind = "password" })
+	rr, m := e.do("GET", "/api.cgi?action=status", "", nil)
+	if rr.Code != 401 || m["error"] != "not_logged_in" || m["auth"] != "password" {
 		t.Fatalf("code=%d body=%v", rr.Code, m)
 	}
 }
@@ -336,16 +347,12 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if rr.Code != 200 || m["weekday"].(float64) != 3 {
 		t.Fatalf("code=%d body=%v", rr.Code, m)
 	}
-	cron, _ := os.ReadFile(e.cron)
-	if !strings.Contains(string(cron), "15 2 * * 3 /qpkg/bin/storage-analyzer scan --trigger schedule") {
-		t.Fatalf("crontab = %s", cron)
-	}
-	if strings.Join(e.ran, "|") != "crontab "+e.cron+"|/etc/init.d/crond.sh restart" {
-		t.Fatalf("ran = %v", e.ran)
+	if len(e.applied) != 1 || e.applied[0].Weekday != 3 || e.applied[0].Time != "02:15" {
+		t.Fatalf("applied = %v", e.applied)
 	}
 	rr, m = e.do("POST", "/api.cgi?action=settings", `{"scheduleMode":"daily","time":"99:00","retention":5,"defaultSizeMode":"disk"}`, post)
-	if rr.Code != 400 || m["error"] != "invalid_settings" {
-		t.Fatalf("code=%d body=%v", rr.Code, m)
+	if rr.Code != 400 || m["error"] != "invalid_settings" || len(e.applied) != 1 {
+		t.Fatalf("code=%d body=%v applied=%v", rr.Code, m, e.applied)
 	}
 }
 
