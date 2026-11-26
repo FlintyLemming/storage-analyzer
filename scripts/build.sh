@@ -15,9 +15,11 @@ arm-x41 arm 7"
 
 echo "==> go test"
 go test ./... >/dev/null
+go test -tags qnap ./... >/dev/null
 
 echo "==> linux tests (all architectures)"
 ./scripts/test-linux.sh
+TAGS=qnap ./scripts/test-linux.sh
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/shared/web"
@@ -27,7 +29,7 @@ echo "$TARGETS" | while read -r qarch goarch goarm; do
 	mkdir -p "$STAGE/$qarch/bin"
 	[ "$goarm" = "-" ] && goarm=
 	GOOS=linux GOARCH=$goarch GOARM=$goarm CGO_ENABLED=0 \
-		go build -trimpath -ldflags="-s -w" -o "$STAGE/$qarch/bin/storage-analyzer" ./cmd/storage-analyzer
+		go build -tags qnap -trimpath -ldflags="-s -w" -o "$STAGE/$qarch/bin/storage-analyzer" ./cmd/storage-analyzer
 	chmod 755 "$STAGE/$qarch/bin/storage-analyzer"
 done
 for qarch in $(echo "$TARGETS" | cut -d' ' -f1); do

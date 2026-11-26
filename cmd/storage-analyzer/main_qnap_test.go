@@ -1,10 +1,11 @@
+//go:build linux && qnap
+
 package main
 
 import (
 	"database/sql"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,15 +29,13 @@ func TestSQLiteTempFilesGoToDataDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.v")
-	cmd.Env = append(os.Environ(), tempProbeRoot+"="+root, "SQLITE_TMPDIR=", "TMPDIR=")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("child: %v\n%s", err, out)
+	out, stderr, code := runChild(t, tempProbeRoot+"="+root, "SQLITE_TMPDIR=", "TMPDIR=")
+	if code != 0 {
+		t.Fatalf("child exit %d\n%s\n%s", code, out, stderr)
 	}
-	_, rest, ok := strings.Cut(string(out), "tempfile=")
+	_, rest, ok := strings.Cut(out, "tempfile=")
 	if !ok {
-		t.Fatalf("child opened no temp file:\n%s", out)
+		t.Fatalf("child opened no temp file:\n%s\n%s", out, stderr)
 	}
 	got, _, _ := strings.Cut(rest, "\n")
 	if want := filepath.Join(root, "data"); filepath.Dir(got) != want {
