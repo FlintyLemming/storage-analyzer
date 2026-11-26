@@ -1,8 +1,8 @@
-# Storage Analyzer for QNAP
+# Storage Analyzer
 
 **English** | [简体中文](README.zh-CN.md)
 
-An ncdu-style disk usage analyzer for QNAP QTS. It scans the data volumes of every storage pool, lets you drill down folder by folder to see what is taking up space, finds files and folders with identical content, and keeps a history of past scans. It opens as a window on the QTS desktop, like the built-in apps.
+An ncdu-style disk usage analyzer with a web interface, for QNAP QTS and for ordinary Linux servers. It scans your disks, lets you drill down folder by folder to see what is taking up space, finds files and folders with identical content, and keeps a history of past scans. On QNAP it opens as a window on the QTS desktop, like the built-in apps; on Linux it runs as a systemd service you open in the browser.
 
 ![All volumes: capacity of each data volume, split into scanned files, space not accounted for, and free space](docs/images/volumes.png)
 
@@ -10,17 +10,19 @@ An ncdu-style disk usage analyzer for QNAP QTS. It scans the data volumes of eve
 
 ## Features
 
-- **Scans every data volume.** Volumes on all storage pools are found automatically. System partitions are skipped, and so are volumes that aren't mounted, such as locked encrypted volumes.
+- **Scans every data volume.** On QNAP, volumes on all storage pools are found automatically; system partitions are skipped, and so are volumes that aren't mounted, such as locked encrypted volumes. On Linux, local disk filesystems are discovered automatically, or you can list the directories to scan.
 - **Folder-by-folder drill-down.** Sort by size, name, item count or modified time. Switch between *Disk usage* (space taken on disk) and *Apparent size* (size of the file contents).
 - **Accounts for the whole volume.** Each volume's bar shows the scanned files, space that isn't accounted for by any file (snapshots, file system metadata, etc.) and free space.
 - **Duplicate finder.** Finds files and folders with identical content, verified with a full SHA-256 hash. When two whole folders are identical, only the largest identical folder is listed, not everything inside it.
 - **Scheduled or on-demand scans.** Run a scan by hand, or daily or weekly at a set time, optionally followed by a duplicate check.
 - **Scan history.** Keeps the most recent successful scans (10 by default), so you can open an older scan and browse it in full.
-- **Stays out of the way.** Scans and duplicate checks run at the lowest CPU and I/O priority, and nothing runs in the background between them.
+- **Stays out of the way.** Scans and duplicate checks run at the lowest CPU and I/O priority. The QNAP version has no background process between them; the Linux version is a resident service that uses no CPU while idle.
 - **Read-only.** It never changes, moves or deletes your files.
-- **English and Chinese UI**, following the QTS language.
+- **English and Chinese UI**, following the QTS language on QNAP and the browser language on Linux.
 
-## Requirements
+## QNAP QTS
+
+### Requirements
 
 - QTS 5.0 or later
 - One of these architectures:
@@ -32,14 +34,151 @@ An ncdu-style disk usage analyzer for QNAP QTS. It scans the data volumes of eve
 > [!NOTE]
 > The ARM packages are built and tested under emulation but haven't been tried on a real ARM NAS yet. If you run one, feedback is welcome.
 
-## Installation
+### Installation
 
-1. Download the `.qpkg` for your NAS's architecture from [Releases](https://github.com/FlintyLemming/storage-analyzer-qnap/releases/latest).
+1. Download the `.qpkg` for your NAS's architecture from [Releases](https://github.com/FlintyLemming/storage-analyzer/releases/latest).
 2. The package isn't signed by QNAP, so allow unsigned apps first: in **App Center**, open **Settings** (gear icon) → **General** and turn on **Allow installation of applications without a valid digital signature**.
 3. In App Center, click **Install Manually** (the icon next to the gear), choose the downloaded file and confirm.
 4. Open **Storage Analyzer** from the QTS main menu.
 
 To update, install the newer `.qpkg` the same way. Your scan history and settings are kept.
+
+## Linux
+
+Runs as a systemd service on `x86_64`, `arm64` and `armv7`.
+
+### Installation
+
+Download the package for your system from [Releases](https://github.com/FlintyLemming/storage-analyzer/releases/latest). Each release has these files, plus a `SHA256SUMS` file:
+
+- `storage-analyzer_<version>_linux_{amd64,arm64,armv7}.tar.gz`
+- `storage-analyzer_<version>_{amd64,arm64,armhf}.deb`
+- `storage-analyzer-<version>-1.{x86_64,aarch64,armv7hl}.rpm`
+
+1. Install it. On Debian, Ubuntu and similar:
+
+   ```bash
+   sudo apt install ./storage-analyzer_<version>_amd64.deb
+   ```
+
+   On Fedora, RHEL and similar:
+
+   ```bash
+   sudo dnf install ./storage-analyzer-<version>-1.x86_64.rpm
+   ```
+
+   Or extract the `.tar.gz` and run its installer, which installs to `/usr/local/bin` and `/etc/systemd/system`:
+
+   ```bash
+   sudo ./install.sh
+   ```
+
+   The first install doesn't start the service.
+
+2. Set the password. There is a single password and no username, at least 12 characters, and it can only be set on the server itself:
+
+   ```bash
+   sudo storage-analyzer passwd
+   ```
+
+   Running it again changes the password and signs out every session.
+
+3. Start the service and enable it at boot:
+
+   ```bash
+   sudo systemctl enable --now storage-analyzer
+   ```
+
+4. Open `http://SERVER:8099` in a browser and sign in.
+
+The service runs as the dedicated user `storage-analyzer` with only the `CAP_DAC_READ_SEARCH` capability, so it can read every file but can't write any, and systemd sandboxing is on. Data is kept in `/var/lib/storage-analyzer`, the configuration is `/etc/storage-analyzer/config`, the password hash is `/etc/storage-analyzer/password`, and logs go to the journal (`journalctl -u storage-analyzer`). Scans and duplicate checks still run at the lowest CPU and I/O priority, as child processes.
+
+### What gets scanned
+
+By default it discovers local disk filesystems from the mount table (ext2/3/4, xfs, btrfs, zfs, f2fs, bcachefs, jfs, reiserfs, ntfs/ntfs3, exfat, vfat, fuseblk). Network filesystems (NFS, SMB, sshfs and other FUSE), virtual and memory filesystems, bind mounts of a filesystem that is already included, and btrfs `.snapshots` are skipped. Set `paths` to scan exactly the directories you list instead; network filesystems are allowed when you list them. In automatic mode, `exclude` drops whole mount points.
+
+### Configuration
+
+Edit `/etc/storage-analyzer/config`, then restart the service with `sudo systemctl restart storage-analyzer`. The format is `key = value`, one per line. Only whole-line `#` comments are allowed (no comments after a value), and unknown keys are errors. The file shipped in the package is a commented template.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `listen` | `:8099` | Address and port to listen on |
+| `tls_cert`, `tls_key` | not set | Paths to a PEM certificate and key. Set both or neither. A renewed certificate is picked up without a restart. |
+| `trusted_proxies` | not set | Comma-separated IPs or CIDRs of reverse proxies whose `X-Forwarded-For` and `X-Forwarded-Proto` headers are trusted |
+| `data_dir` | `/var/lib/storage-analyzer` | Where scan results and state are stored |
+| `paths` | `auto` | `auto`, or a comma-separated list of directories, such as `/a, /b` |
+| `exclude` | not set | Comma-separated mount points to leave out in auto mode, such as `/mnt/x` |
+
+### HTTPS and reverse proxy
+
+Without HTTPS, the sign-in page warns that the connection isn't encrypted. Either serve HTTPS directly by setting `tls_cert` and `tls_key`, or put the service behind a reverse proxy.
+
+When using a proxy, listen on loopback only and add the proxy's address to `trusted_proxies`, so the real client address is used. Otherwise every user appears as the proxy's address and they all share one sign-in lockout.
+
+```ini
+listen = 127.0.0.1:8099
+trusted_proxies = 127.0.0.1
+```
+
+Caddy:
+
+```
+storage.example.com {
+    reverse_proxy 127.0.0.1:8099
+}
+```
+
+nginx:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8099;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+### Sign-in protection
+
+After 5 failed sign-in attempts from one address within 15 minutes, that address is locked out for 15 minutes. Across all addresses, at most 20 password checks are made per minute. Failed attempts are logged as `login failed from <ip>`, which fail2ban can match. A session cookie lasts 30 days.
+
+### Ports below 1024 and a custom data directory
+
+The service can't bind ports below 1024 by default. To use one, or to move `data_dir` elsewhere, add a systemd override:
+
+```bash
+sudo systemctl edit storage-analyzer
+```
+
+For a port below 1024:
+
+```ini
+[Service]
+AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_NET_BIND_SERVICE
+```
+
+For a different `data_dir`, make the directory writable by the `storage-analyzer` user and allow it:
+
+```ini
+[Service]
+ReadWritePaths=/your/data/dir
+```
+
+Then restart the service.
+
+### Uninstalling
+
+- Debian and Ubuntu: `sudo apt remove storage-analyzer` keeps the configuration and data; `sudo apt purge storage-analyzer` removes them too.
+- Fedora and RHEL: `sudo dnf remove storage-analyzer` keeps the data. Delete `/etc/storage-analyzer` and `/var/lib/storage-analyzer` by hand if you want them gone.
+- Tarball install: `sudo ./uninstall.sh`. Add `--purge` to also delete the configuration and data.
+
+### Known limitations
+
+- btrfs subvolumes that aren't mounted separately are skipped, like `ncdu -x`.
+- There is no Docker image yet.
+- The packages only support systemd; other init systems aren't supported.
 
 ## Usage
 
@@ -51,7 +190,7 @@ Use the **Scan** picker to switch between saved scans. **History** lists every s
 
 ### Browsing
 
-The top level shows each data volume. Click a folder to open it, and use the breadcrumbs or **.. Up one level** to go back. Click a column header to sort by it.
+The top level shows each data volume (on Linux, each scanned filesystem). Click a folder to open it, and use the breadcrumbs or **.. Up one level** to go back. Click a column header to sort by it.
 
 Hard links are counted only once (the other links are tagged), symbolic links aren't followed, and scans don't cross into other mounted file systems.
 
@@ -68,20 +207,20 @@ Storage Analyzer doesn't delete anything. Use File Station or your usual tools t
 
 ### Settings
 
-- **Scheduled scan:** off, daily or weekly, at a time in the NAS's local time zone.
+- **Scheduled scan:** off, daily or weekly, at a time in the server's local time zone.
 - **Check for duplicates after the scan:** runs a duplicate check on each scheduled scan once it finishes.
 - **Keep results:** how many recent successful scans to keep (1–100). Each result takes tens to hundreds of MB.
 - **Default size:** whether to show *Disk usage* or *Apparent size* by default.
 
 ## Building from source
 
-You need Go 1.26 or later and Docker. Packaging uses QNAP's [QDK](https://github.com/qnap-dev/QDK), which runs in a container.
+You need Go 1.26 or later and Docker. QNAP packaging uses QNAP's [QDK](https://github.com/qnap-dev/QDK), which runs in a container.
 
 ```bash
 ./scripts/build.sh
 ```
 
-This runs the tests (including the Linux tests for every architecture, in Docker), cross-compiles the binary and writes `build/StorageAnalyzer_<version>_<arch>.qpkg` for `x86_64`, `arm_64` and `arm-x41`.
+This runs the tests (including the Linux tests for every architecture, in Docker), cross-compiles the binary and writes `build/StorageAnalyzer_<version>_<arch>.qpkg` for `x86_64`, `arm_64` and `arm-x41`. For the Linux packages (`.tar.gz`, `.deb` and `.rpm`), run `./scripts/build-linux.sh`.
 
 To work on the UI locally, build a native binary and start the development server. It scans the folders listed in `SA_DEV_ROOTS` instead of NAS volumes and skips authentication, so it only listens on loopback:
 
@@ -97,7 +236,7 @@ Then open <http://127.0.0.1:8099/>.
 
 ## How it works
 
-There's no resident process. A single static Go binary serves the web UI's API as a CGI program behind QTS's own web server, and is launched in the background when a scan or duplicate check starts. Scheduled scans are a line in the QTS crontab. Each scan is saved as its own SQLite database, so opening an old scan is as fast as opening the latest. All data lives in the app's install folder and is removed when the app is uninstalled.
+A single static Go binary serves everything. On QNAP there's no resident process: it runs as a CGI program behind QTS's own web server, using the QTS administrator session, and is launched in the background when a scan or duplicate check starts. On Linux it runs as a resident systemd service with its own sign-in, and starts scans and duplicate checks as child processes. Scheduled scans are a line in the QTS crontab on QNAP. Each scan is saved as its own SQLite database, so opening an old scan is as fast as opening the latest. On QNAP, all data lives in the app's install folder and is removed when the app is uninstalled.
 
 ## License
 
