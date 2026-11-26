@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -67,11 +68,16 @@ func newApp(pf *platformFlags) (*app, error) {
 	if r, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = r
 	}
+	// Children run from "/", so they need an absolute config path.
+	absConfig, err := filepath.Abs(pf.config)
+	if err != nil {
+		return nil, err
+	}
 	return &app{
 		data:      cfg.DataDir,
 		bin:       exe,
 		discover:  func() ([]volumes.Volume, []volumes.Skipped, error) { return mounts.Discover(cfg) },
-		childArgs: []string{"--config", pf.config},
+		childArgs: []string{"--config", absConfig},
 	}, nil
 }
 
@@ -114,9 +120,7 @@ func serve(a *app, pf *platformFlags) error {
 	defer sessions.Close()
 	login := auth.NewLogin(pw, sessions, auth.NewLimiter(), cfg.TrustedProxies)
 
-	spawn := func(args ...string) error {
-		return api.SpawnDetached(a.bin, append(args, a.childArgs...)...)
-	}
+	spawn := func(args ...string) error { return spawnChild(a, args...) }
 	apiH := api.New(api.Config{DataDir: a.data, BinPath: a.bin, Auth: login, Spawn: spawn, LoginKind: "password"})
 	srv := server.NewServer(cfg.Listen, server.Handler(server.Options{API: apiH, Login: login, Static: web.Files}))
 	useTLS := cfg.TLSCert != ""
@@ -196,10 +200,8 @@ func serveDev(a *app, pf *platformFlags) error {
 	os.MkdirAll(filepath.Join(a.data, "scans"), 0o755)
 	h := api.New(api.Config{
 		DataDir: a.data, BinPath: a.bin,
-		Auth: allowAll{},
-		Spawn: func(args ...string) error {
-			return api.SpawnDetached(a.bin, append(args, a.childArgs...)...)
-		},
+		Auth:  allowAll{},
+		Spawn: func(args ...string) error { return spawnChild(a, args...) },
 		ApplySchedule: func(s catalog.Settings) error {
 			log.Printf("(dev) skip apply schedule %+v", s)
 			return nil
@@ -207,6 +209,25 @@ func serveDev(a *app, pf *platformFlags) error {
 	})
 	log.Printf("dev server on http://%s/ (data=%s)", addr, a.data)
 	return server.NewServer(addr, server.Handler(server.Options{API: h, Static: static})).ListenAndServe()
+}
+
+// spawnChild starts this binary again with args and a.childArgs in its own
+// session, without waiting for it. The long-running server reaps it in the
+// background so finished scans do not stay behind as zombies.
+func spawnChild(a *app, args ...string) error {
+	_, err := startReaped(a.bin, append(args, a.childArgs...)...)
+	return err
+}
+
+func startReaped(bin string, args ...string) (pid int, err error) {
+	cmd := exec.Command(bin, args...)
+	cmd.Dir = "/"
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return 0, err
+	}
+	go cmd.Wait()
+	return cmd.Process.Pid, nil
 }
 
 type allowAll struct{}
