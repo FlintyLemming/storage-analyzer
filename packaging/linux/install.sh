@@ -30,12 +30,14 @@ if [ -f /etc/storage-analyzer/password ]; then
 fi
 
 if [ -d /run/systemd/system ]; then
-	systemctl daemon-reload
+	systemctl daemon-reload || true
 	if systemctl is-active --quiet storage-analyzer; then
 		systemctl try-restart storage-analyzer
 		echo "Upgraded and restarted storage-analyzer."
 		exit 0
 	fi
 fi
-echo "Set the web password:  sudo storage-analyzer passwd"
+if [ ! -f /etc/storage-analyzer/password ]; then
+	echo "Set the web password:  sudo storage-analyzer passwd"
+fi
 echo "Start the service:     sudo systemctl enable --now storage-analyzer"

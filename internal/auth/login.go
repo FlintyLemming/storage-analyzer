@@ -61,7 +61,8 @@ func (l *Login) Check(r *http.Request) (string, bool, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return "", false, api.ErrNotLoggedIn
 		}
-		return "", false, err
+		log.Printf("auth: read password file: %v", err)
+		return "", false, errors.New("authentication unavailable")
 	}
 	if !l.Sessions.Valid(c.Value, Fingerprint(phc), l.Now()) {
 		return "", false, api.ErrNotLoggedIn

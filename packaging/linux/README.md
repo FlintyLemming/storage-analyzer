@@ -12,7 +12,7 @@ This installs the binary to /usr/local/bin, the systemd unit to
 
 ## First start
 
-    sudo storage-analyzer passwd --config /etc/storage-analyzer/config
+    sudo storage-analyzer passwd
     sudo systemctl enable --now storage-analyzer
 
 Then open http://SERVER:8099 and sign in with that password.

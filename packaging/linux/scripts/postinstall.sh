@@ -23,7 +23,7 @@ if [ "${1:-}" = configure ] && [ -z "${2:-}" ]; then first=1; fi
 if [ "${1:-}" = 1 ]; then first=1; fi
 
 if [ -d /run/systemd/system ]; then
-	systemctl daemon-reload
+	systemctl daemon-reload || true
 	if [ -z "$first" ] && systemctl is-active --quiet storage-analyzer; then
 		systemctl try-restart storage-analyzer
 	fi

@@ -97,7 +97,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, admin, err := h.cfg.Auth.Check(r)
 	if err != nil {
 		if errors.Is(err, ErrNotLoggedIn) {
-			body := map[string]string{"error": "not_logged_in", "message": "not logged in to QTS"}
+			msg := "not logged in to QTS"
+			if h.cfg.LoginKind != "" {
+				msg = "not logged in"
+			}
+			body := map[string]string{"error": "not_logged_in", "message": msg}
 			if h.cfg.LoginKind != "" {
 				body["auth"] = h.cfg.LoginKind
 			}

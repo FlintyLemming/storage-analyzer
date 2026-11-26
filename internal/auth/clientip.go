@@ -7,7 +7,7 @@ import (
 )
 
 func isTrusted(a netip.Addr, trusted []netip.Prefix) bool {
-	a = a.Unmap()
+	a = a.Unmap().WithZone("")
 	for _, p := range trusted {
 		if p.Contains(a) {
 			return true
@@ -18,10 +18,10 @@ func isTrusted(a netip.Addr, trusted []netip.Prefix) bool {
 
 func peerAddr(r *http.Request) netip.Addr {
 	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
-		return ap.Addr().Unmap()
+		return ap.Addr().Unmap().WithZone("")
 	}
 	if a, err := netip.ParseAddr(r.RemoteAddr); err == nil {
-		return a.Unmap()
+		return a.Unmap().WithZone("")
 	}
 	return netip.Addr{}
 }
@@ -45,7 +45,7 @@ func ClientIP(r *http.Request, trusted []netip.Prefix) netip.Addr {
 		if err != nil {
 			return peer
 		}
-		a = a.Unmap()
+		a = a.Unmap().WithZone("")
 		if isTrusted(a, trusted) {
 			continue
 		}

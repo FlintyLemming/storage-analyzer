@@ -35,6 +35,8 @@ func TestClientIP(t *testing.T) {
 		{"all trusted", "127.0.0.1:5555", loop, []string{"127.0.0.1"}, "127.0.0.1"},
 		{"mapped xff entry", "127.0.0.1:5555", loop, []string{"::ffff:127.0.0.1, 9.9.9.9"}, "9.9.9.9"},
 		{"no port", "203.0.113.9", nil, nil, "203.0.113.9"},
+		{"zoned ipv6 xff stripped", "127.0.0.1:5555", loop, []string{"fe80::1%eth0"}, "fe80::1"},
+		{"zoned ipv6 peer trusted", "[fe80::1%eth0]:5555", prefixes("fe80::/64"), []string{"198.51.100.7"}, "198.51.100.7"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -4,8 +4,10 @@ package mounts
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -27,6 +29,7 @@ type Mount struct {
 	MountPoint string
 	FSType     string
 	Source     string
+	SubvolID   string // btrfs subvolid=<N> from super options, empty otherwise
 }
 
 // LocalTypes are the filesystem types treated as local disks.
@@ -62,12 +65,23 @@ func Parse(r io.Reader) ([]Mount, error) {
 		if err1 != nil || err2 != nil {
 			return nil, fmt.Errorf("mountinfo line %d: bad mount id", n)
 		}
+		fsType := f[sep+1]
+		var subvolID string
+		if fsType == "btrfs" && len(f) > sep+3 {
+			for _, opt := range strings.Split(f[sep+3], ",") {
+				if id, ok := strings.CutPrefix(opt, "subvolid="); ok && id != "" {
+					subvolID = id
+					break
+				}
+			}
+		}
 		out = append(out, Mount{
 			ID: id, Parent: parent, Dev: f[2],
 			Root:       volumes.UnescapeMount(f[3]),
 			MountPoint: volumes.UnescapeMount(f[4]),
-			FSType:     f[sep+1],
+			FSType:     fsType,
 			Source:     volumes.UnescapeMount(f[sep+2]),
+			SubvolID:   subvolID,
 		})
 	}
 	if err := sc.Err(); err != nil {
@@ -103,7 +117,15 @@ func Select(ms []Mount, exclude []string) []volumes.Volume {
 		if m.FSType == "btrfs" && filepath.Base(m.MountPoint) == ".snapshots" {
 			continue
 		}
-		groups[m.Dev] = append(groups[m.Dev], m)
+		// Distinct btrfs subvolumes share a mountinfo major:minor but have
+		// distinct stat(2) st_dev values (so the scanner does not cross into
+		// them); group by subvolid so mounted child subvolumes aren't dropped
+		// when a parent subvolume (e.g. subvolid=5) is also mounted.
+		key := m.Dev
+		if m.SubvolID != "" {
+			key = m.Dev + "#subvolid=" + m.SubvolID
+		}
+		groups[key] = append(groups[key], m)
 	}
 
 	// 4. drop mounts whose content is already covered by another on the same device.
@@ -167,7 +189,11 @@ func FromPaths(paths []string, ms []Mount) ([]volumes.Volume, []volumes.Skipped)
 		seen[p] = true
 		st, err := os.Stat(p)
 		if err != nil {
-			skipped = append(skipped, volumes.Skipped{Name: p, Reason: "not_found"})
+			reason := "read_error"
+			if errors.Is(err, fs.ErrNotExist) {
+				reason = "not_found"
+			}
+			skipped = append(skipped, volumes.Skipped{Name: p, Reason: reason})
 			continue
 		}
 		if !st.IsDir() {

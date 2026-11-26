@@ -123,7 +123,7 @@ trusted_proxies = 127.0.0.1
 
 Caddy:
 
-```
+```caddy
 storage.example.com {
     reverse_proxy 127.0.0.1:8099
 }
@@ -134,6 +134,7 @@ nginx:
 ```nginx
 location / {
     proxy_pass http://127.0.0.1:8099;
+    proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
@@ -203,7 +204,7 @@ Switch to **Duplicates** and click **Start duplicate check**. Groups of identica
 - Files that changed after the scan are left out of the comparison.
 - Hashes are cached between checks. The first check reads every candidate file and can take a few hours; later checks only read new or changed files and usually take minutes to an hour.
 
-Storage Analyzer doesn't delete anything. Use File Station or your usual tools to remove what you don't need.
+Storage Analyzer doesn't delete anything. Use File Station (on QNAP) or your usual tools to remove what you don't need.
 
 ### Settings
 
@@ -222,14 +223,13 @@ You need Go 1.26 or later and Docker. QNAP packaging uses QNAP's [QDK](https://g
 
 This runs the tests (including the Linux tests for every architecture, in Docker), cross-compiles the binary and writes `build/StorageAnalyzer_<version>_<arch>.qpkg` for `x86_64`, `arm_64` and `arm-x41`. For the Linux packages (`.tar.gz`, `.deb` and `.rpm`), run `./scripts/build-linux.sh`.
 
-To work on the UI locally, build a native binary and start the development server. It scans the folders listed in `SA_DEV_ROOTS` instead of NAS volumes and skips authentication, so it only listens on loopback:
+To work on the UI locally, build a native binary, write a dev config file pointing at the folder you want to scan, and start the development server (it skips authentication and only listens on loopback):
 
 ```bash
+mkdir -p build/dev
+printf 'data_dir = %s/build/dev/data\npaths = %s/Projects\n' "$PWD" "$HOME" > build/dev/config
 go build -o build/dev/bin/storage-analyzer ./cmd/storage-analyzer
-```
-
-```bash
-SA_DEV_ROOTS=$HOME/Projects ./build/dev/bin/storage-analyzer serve --insecure-no-auth --root build/dev --web web
+./build/dev/bin/storage-analyzer serve --config build/dev/config --insecure-no-auth --web web
 ```
 
 Then open <http://127.0.0.1:8099/>.

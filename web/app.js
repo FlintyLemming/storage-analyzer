@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const SKIP_REASONS = new Set(['not_mounted', 'not_share_volume', 'not_found', 'not_directory']);
+  const SKIP_REASONS = new Set(['not_mounted', 'not_share_volume', 'not_found', 'not_directory', 'read_error']);
   const LINUX = I18N.platform === 'linux';
   const KIND = { FILE: 0, DIR: 1, SYMLINK: 2, OTHER: 3, MOUNT: 4 };
   const FLAG = { ERROR: 1, HARDLINK_DUP: 2, BAD_NAME: 4 };
@@ -386,6 +386,9 @@
 
   // Linux build: password sign-in form in the main content area.
   function showLogin() {
+    clearTimeout(state.pollTimer);
+    closeDialog();
+    if ($('loginPassword')) return;
     for (const id of ['progress', 'dupBar', 'dupWrap', 'volumes']) $(id).classList.add('hidden');
     document.querySelector('.toolbar').classList.add('hidden');
     $('crumbs').replaceChildren();

@@ -123,7 +123,7 @@ trusted_proxies = 127.0.0.1
 
 Caddy：
 
-```
+```caddy
 storage.example.com {
     reverse_proxy 127.0.0.1:8099
 }
@@ -134,6 +134,7 @@ nginx：
 ```nginx
 location / {
     proxy_pass http://127.0.0.1:8099;
+    proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
@@ -203,7 +204,7 @@ ReadWritePaths=/your/data/dir
 - 扫描后发生变化的文件不参与比较。
 - 校验值会缓存下来。第一次检查要读所有候选文件，可能需要几个小时；之后只读新增或变化过的文件，通常几分钟到几十分钟。
 
-Storage Analyzer 不会删除任何东西，不需要的文件请用 File Station 等工具自行删除。
+Storage Analyzer 不会删除任何东西，不需要的文件请在 QNAP 上用 File Station 或使用常用工具自行删除。
 
 ### 设置
 
@@ -222,14 +223,13 @@ Storage Analyzer 不会删除任何东西，不需要的文件请用 File Statio
 
 它会先运行测试（包括在 Docker 中针对每个架构运行的 Linux 测试），然后交叉编译，生成 `x86_64`、`arm_64` 和 `arm-x41` 三个安装包：`build/StorageAnalyzer_<版本>_<架构>.qpkg`。Linux 安装包（`.tar.gz`、`.deb` 和 `.rpm`）用 `./scripts/build-linux.sh` 构建。
 
-在本地开发界面时，先编译本机二进制，再启动开发服务器。它扫描 `SA_DEV_ROOTS` 中列出的目录而不是 NAS 的卷，并且跳过登录验证，因此只监听本机回环地址：
+在本地开发界面时，先编译本机二进制，写一份指向待扫描目录的开发配置，再启动开发服务器（跳过登录验证，只监听本机回环地址）：
 
 ```bash
+mkdir -p build/dev
+printf 'data_dir = %s/build/dev/data\npaths = %s/Projects\n' "$PWD" "$HOME" > build/dev/config
 go build -o build/dev/bin/storage-analyzer ./cmd/storage-analyzer
-```
-
-```bash
-SA_DEV_ROOTS=$HOME/Projects ./build/dev/bin/storage-analyzer serve --insecure-no-auth --root build/dev --web web
+./build/dev/bin/storage-analyzer serve --config build/dev/config --insecure-no-auth --web web
 ```
 
 然后打开 <http://127.0.0.1:8099/>。

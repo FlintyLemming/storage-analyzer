@@ -35,14 +35,15 @@ func mps(vs []volumes.Volume) []string {
 
 func TestSelectFixtures(t *testing.T) {
 	cases := map[string][]string{
-		"ubuntu-ext4":    {"/", "/boot/efi"},
-		"btrfs-subvol":   {"/", "/home"},
-		"proxmox-zfs":    {"/", "/rpool", "/rpool/data", "/rpool/data/subvol-100-disk-0"},
-		"docker-host":    {"/"},
-		"network":        {"/", "/media/usb"},
-		"systemd-strict": {"/", "/boot/efi"},
-		"bind":           {"/", "/data"},
-		"escape":         {"/", "/mnt/my disk"},
+		"ubuntu-ext4":         {"/", "/boot/efi"},
+		"btrfs-subvol":        {"/", "/home"},
+		"btrfs-nested-subvol": {"/", "/boot/efi", "/mnt/extend", "/var/lib/containerd", "/var/lib/etcd", "/var/lib/kubelet"},
+		"proxmox-zfs":         {"/", "/rpool", "/rpool/data", "/rpool/data/subvol-100-disk-0"},
+		"docker-host":         {"/"},
+		"network":             {"/", "/media/usb"},
+		"systemd-strict":      {"/", "/boot/efi"},
+		"bind":                {"/", "/data"},
+		"escape":              {"/", "/mnt/my disk"},
 	}
 	for name, want := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -114,8 +115,12 @@ func TestFromPaths(t *testing.T) {
 		{MountPoint: root, FSType: "xfs", Source: "/dev/sdb1"},
 	}
 	a, b, c := filepath.Join(root, "a"), filepath.Join(root, "a/b"), filepath.Join(root, "c")
+	file := filepath.Join(root, "plain-file")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	missing := filepath.Join(root, "missing")
-	vs, sk := FromPaths([]string{a, b, c, missing}, ms)
+	vs, sk := FromPaths([]string{a, b, c, missing, file}, ms)
 	if got, want := mps(vs), []string{a, c}; !reflect.DeepEqual(got, want) {
 		t.Errorf("volumes %v, want %v", got, want)
 	}
@@ -124,8 +129,12 @@ func TestFromPaths(t *testing.T) {
 			t.Errorf("bad volume %+v", v)
 		}
 	}
-	if want := []volumes.Skipped{{Name: missing, Reason: "not_found"}}; !reflect.DeepEqual(sk, want) {
-		t.Errorf("skipped %v, want %v", sk, want)
+	wantSkip := []volumes.Skipped{
+		{Name: missing, Reason: "not_found"},
+		{Name: file, Reason: "not_directory"},
+	}
+	if !reflect.DeepEqual(sk, wantSkip) {
+		t.Errorf("skipped %v, want %v", sk, wantSkip)
 	}
 }
 

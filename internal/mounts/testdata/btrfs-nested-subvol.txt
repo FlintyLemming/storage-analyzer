@@ -1,0 +1,8 @@
+31 1 259:3 / / rw,relatime shared:1 - ext4 /dev/nvme0n1p2 rw
+109 31 259:2 / /boot/efi rw,relatime shared:93 - vfat /dev/nvme0n1p1 rw
+117 31 0:37 / /mnt/extend rw,noatime shared:133 - btrfs /dev/md0 rw,compress=zstd:3,subvolid=5,subvol=/
+118 31 0:37 /data /srv/extend-bind rw,noatime shared:133 - btrfs /dev/md0 rw,compress=zstd:3,subvolid=5,subvol=/
+113 31 0:37 /k8s/kubelet /var/lib/kubelet rw,noatime shared:136 - btrfs /dev/md0 rw,compress=zstd:3,subvolid=519,subvol=/k8s/kubelet
+119 31 0:37 /k8s/kubelet/pods /srv/kubelet-bind rw,noatime shared:136 - btrfs /dev/md0 rw,compress=zstd:3,subvolid=519,subvol=/k8s/kubelet
+114 31 0:37 /k8s/etcd /var/lib/etcd rw,noatime shared:139 - btrfs /dev/md0 rw,compress=zstd:3,subvolid=517,subvol=/k8s/etcd
+116 31 0:37 /k8s/containerd /var/lib/containerd rw,noatime shared:142 - btrfs /dev/md0 rw,compress=zstd:3,subvolid=518,subvol=/k8s/containerd

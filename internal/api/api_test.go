@@ -116,7 +116,7 @@ func TestAuthRequired(t *testing.T) {
 func TestAuthRequiredReportsLoginKind(t *testing.T) {
 	e := newEnvCfg(t, fakeAuth{err: ErrNotLoggedIn}, func(c *Config) { c.LoginKind = "password" })
 	rr, m := e.do("GET", "/api.cgi?action=status", "", nil)
-	if rr.Code != 401 || m["error"] != "not_logged_in" || m["auth"] != "password" {
+	if rr.Code != 401 || m["error"] != "not_logged_in" || m["auth"] != "password" || m["message"] != "not logged in" {
 		t.Fatalf("code=%d body=%v", rr.Code, m)
 	}
 }

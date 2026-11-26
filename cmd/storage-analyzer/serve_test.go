@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"io"
 	"net"
 	"net/http"
@@ -11,12 +12,30 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/FlintyLemming/storage-analyzer/internal/auth"
 )
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 const (
 	childArgsEnv  = "SA_CHILD_ARGS"  // run main with these (space separated) arguments
@@ -75,6 +94,40 @@ func TestServeWithoutPasswordExits78(t *testing.T) {
 	}
 }
 
+func TestServeBadPasswordExits78(t *testing.T) {
+	if childMain(t) {
+		return
+	}
+	root, cfg := writeConfig(t, "127.0.0.1:0")
+	if err := os.WriteFile(filepath.Join(root, "password"), []byte("not-a-phc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, code := runChild(t, childArgsEnv+"=serve --config "+cfg)
+	if code != 78 {
+		t.Fatalf("exit %d, want 78\n%s", code, stderr)
+	}
+}
+
+func TestServeBadTLSExits78(t *testing.T) {
+	if childMain(t) {
+		return
+	}
+	root, cfg := writeConfig(t, "127.0.0.1:0")
+	if _, errOut, code := runChild(t, childArgsEnv+"=passwd --config "+cfg, childStdinEnv+"=correct horse battery\n"); code != 0 {
+		t.Fatalf("passwd exit %d\n%s", code, errOut)
+	}
+	f, err := os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString("tls_cert = " + filepath.Join(root, "missing.pem") + "\ntls_key = " + filepath.Join(root, "missing.key") + "\n")
+	f.Close()
+	_, stderr, code := runChild(t, childArgsEnv+"=serve --config "+cfg)
+	if code != 78 {
+		t.Fatalf("exit %d, want 78\n%s", code, stderr)
+	}
+}
+
 func TestPasswdFromStdin(t *testing.T) {
 	if childMain(t) {
 		return
@@ -122,7 +175,7 @@ func TestServeEndToEnd(t *testing.T) {
 	}
 
 	// serve keeps running, which runChild (waits for exit) cannot do.
-	var stderr strings.Builder
+	var stderr syncBuffer
 	srv := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
 	srv.Env = append(os.Environ(), childArgsEnv+"=serve --config "+cfg)
 	srv.Stderr = &stderr

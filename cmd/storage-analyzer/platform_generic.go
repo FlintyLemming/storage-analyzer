@@ -108,10 +108,15 @@ func serve(a *app, pf *platformFlags) error {
 		return err
 	}
 	pw := &auth.PasswordFile{Path: cfg.PasswordPath()}
-	if _, err := pw.Current(); errors.Is(err, fs.ErrNotExist) {
+	phc, err := pw.Current()
+	if errors.Is(err, fs.ErrNotExist) {
 		return exitError{code: 78, err: errors.New(`no password set: run "sudo storage-analyzer passwd" first`)}
-	} else if err != nil {
-		return err
+	}
+	if err != nil {
+		return exitError{code: 78, err: fmt.Errorf("read password file: %w", err)}
+	}
+	if err := auth.ValidateHash(phc); err != nil {
+		return exitError{code: 78, err: fmt.Errorf("invalid password file %s: %w", cfg.PasswordPath(), err)}
 	}
 	sessions, err := auth.OpenSessions(filepath.Join(a.data, "sessions.db"))
 	if err != nil {
@@ -127,7 +132,11 @@ func serve(a *app, pf *platformFlags) error {
 	scheme := "http"
 	if useTLS {
 		scheme = "https"
-		srv.TLSConfig = server.TLSConfig(&server.CertReloader{CertFile: cfg.TLSCert, KeyFile: cfg.TLSKey})
+		reloader := &server.CertReloader{CertFile: cfg.TLSCert, KeyFile: cfg.TLSKey}
+		if _, err := reloader.GetCertificate(nil); err != nil {
+			return exitError{code: 78, err: fmt.Errorf("load TLS certificate: %w", err)}
+		}
+		srv.TLSConfig = server.TLSConfig(reloader)
 	}
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -151,7 +160,11 @@ func serve(a *app, pf *platformFlags) error {
 		},
 		Fire: func() error { return spawn("scan", "--trigger", "schedule") },
 	}
-	go sched.Run(ctx)
+	schedDone := make(chan struct{})
+	go func() {
+		defer close(schedDone)
+		sched.Run(ctx)
+	}()
 
 	errc := make(chan error, 1)
 	go func() {
@@ -163,8 +176,12 @@ func serve(a *app, pf *platformFlags) error {
 	}()
 	select {
 	case err := <-errc:
+		stop()
+		<-schedDone
 		return err
 	case <-ctx.Done():
+		stop()
+		<-schedDone
 	}
 	if err := runner.Cancel(a.data); err != nil && !errors.Is(err, runner.ErrNotRunning) {
 		log.Printf("cancel running scan: %v", err)

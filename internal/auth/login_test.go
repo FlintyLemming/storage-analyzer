@@ -231,6 +231,25 @@ func TestLoginUnknownAction(t *testing.T) {
 	}
 }
 
+func TestCheckPasswordReadErrorHidesPath(t *testing.T) {
+	l, pwPath := newTestLogin(t)
+	c := sessionCookie(t, doLogin(l, testPW, nil))
+	// Replace password file with a directory so ReadFile fails with EISDIR (even as root).
+	os.Remove(pwPath)
+	if err := os.Mkdir(pwPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	log.SetOutput(&bytes.Buffer{})
+	defer log.SetOutput(os.Stderr)
+	_, _, err := l.Check(withCookie(c))
+	if err == nil || errors.Is(err, api.ErrNotLoggedIn) {
+		t.Fatalf("err = %v, want non-ErrNotLoggedIn error", err)
+	}
+	if strings.Contains(err.Error(), pwPath) {
+		t.Fatalf("error leaked password path: %v", err)
+	}
+}
+
 func TestLoginParallelLockout(t *testing.T) {
 	l, _ := newTestLogin(t)
 	log.SetOutput(&bytes.Buffer{})

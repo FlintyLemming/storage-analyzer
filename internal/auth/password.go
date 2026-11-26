@@ -69,21 +69,26 @@ func Hash(pw string) (string, error) {
 
 var errBadHash = errors.New("malformed password hash")
 
-// Verify reports whether pw matches the PHC string. The parameters are read
-// from phc itself, so hashes made with older parameters keep verifying.
-func Verify(phc, pw string) (bool, error) {
+type parsedPHC struct {
+	m, t uint32
+	p    uint8
+	salt []byte
+	key  []byte
+}
+
+func parsePHC(phc string) (parsedPHC, error) {
 	parts := strings.Split(phc, "$")
 	// "", "argon2id", "v=19", "m=..,t=..,p=..", salt, hash
 	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" {
-		return false, errBadHash
+		return parsedPHC{}, errBadHash
 	}
 	if parts[2] != "v=19" {
-		return false, fmt.Errorf("%w: unsupported version", errBadHash)
+		return parsedPHC{}, fmt.Errorf("%w: unsupported version", errBadHash)
 	}
 	var m, t, p uint64
 	ps := strings.Split(parts[3], ",")
 	if len(ps) != 3 {
-		return false, errBadHash
+		return parsedPHC{}, errBadHash
 	}
 	for i, pair := range []struct {
 		prefix string
@@ -91,27 +96,44 @@ func Verify(phc, pw string) (bool, error) {
 	}{{"m=", &m}, {"t=", &t}, {"p=", &p}} {
 		s, ok := strings.CutPrefix(ps[i], pair.prefix)
 		if !ok {
-			return false, errBadHash
+			return parsedPHC{}, errBadHash
 		}
 		v, err := strconv.ParseUint(s, 10, 32)
 		if err != nil {
-			return false, errBadHash
+			return parsedPHC{}, errBadHash
 		}
 		*pair.dst = v
 	}
 	if m == 0 || t == 0 || p == 0 || m > maxArgonMemory || t > maxArgonTime || p > maxArgonThreads {
-		return false, fmt.Errorf("%w: parameters out of range", errBadHash)
+		return parsedPHC{}, fmt.Errorf("%w: parameters out of range", errBadHash)
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
 	if err != nil || len(salt) == 0 || len(salt) > maxSaltLen {
-		return false, errBadHash
+		return parsedPHC{}, errBadHash
 	}
 	want, err := base64.RawStdEncoding.DecodeString(parts[5])
 	if err != nil || len(want) == 0 || len(want) > maxKeyLen {
-		return false, errBadHash
+		return parsedPHC{}, errBadHash
 	}
-	got := argon2.IDKey([]byte(pw), salt, uint32(t), uint32(m), uint8(p), uint32(len(want)))
-	return subtle.ConstantTimeCompare(got, want) == 1, nil
+	return parsedPHC{m: uint32(m), t: uint32(t), p: uint8(p), salt: salt, key: want}, nil
+}
+
+// ValidateHash checks that phc is a well-formed argon2id PHC string with
+// parameters within bounds, without running Argon2id.
+func ValidateHash(phc string) error {
+	_, err := parsePHC(phc)
+	return err
+}
+
+// Verify reports whether pw matches the PHC string. The parameters are read
+// from phc itself, so hashes made with older parameters keep verifying.
+func Verify(phc, pw string) (bool, error) {
+	p, err := parsePHC(phc)
+	if err != nil {
+		return false, err
+	}
+	got := argon2.IDKey([]byte(pw), p.salt, p.t, p.m, p.p, uint32(len(p.key)))
+	return subtle.ConstantTimeCompare(got, p.key) == 1, nil
 }
 
 // Fingerprint identifies a password hash (first 32 hex chars of its SHA-256);
