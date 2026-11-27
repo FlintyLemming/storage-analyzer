@@ -69,3 +69,23 @@ func (a QTSAuth) Check(r *http.Request) (string, bool, error) {
 	}
 	return strings.TrimSpace(x.Username), strings.TrimSpace(x.IsAdmin) == "1", nil
 }
+
+// FnOSAuth authenticates requests forwarded by the fnOS unified gateway over
+// the local Unix socket, using the X-Trim-* identity headers injected by
+// trim_http_cgi after validating the fnOS session.
+type FnOSAuth struct{}
+
+// Check implements Authenticator.
+func (FnOSAuth) Check(r *http.Request) (string, bool, error) {
+	uid := strings.TrimSpace(r.Header.Get("X-Trim-Userid"))
+	user := strings.TrimSpace(r.Header.Get("X-Trim-Username"))
+	if uid == "" && user == "" {
+		return "", false, ErrNotLoggedIn
+	}
+	if user == "" {
+		user = uid
+	}
+	isAdmin := strings.TrimSpace(r.Header.Get("X-Trim-Isadmin"))
+	admin := strings.EqualFold(isAdmin, "true") || isAdmin == "1"
+	return user, admin, nil
+}

@@ -10,20 +10,23 @@ import (
 	"io/fs"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
 // Options configures Handler.
 type Options struct {
-	API    http.Handler // handles /api.cgi
-	Login  http.Handler // handles action=login/logout; nil returns 404 for them
-	Static fs.FS        // frontend files
+	API        http.Handler // handles /api.cgi
+	Login      http.Handler // handles action=login/logout; nil returns 404 for them
+	Static     fs.FS        // frontend files
+	Platform   string       // data-platform attribute in index.html; default "linux"
+	Prefix     string       // optional URL prefix (e.g. "/app/storage-analyzer")
+	AllowFrame bool         // allow same-origin iframe embedding (e.g. fnOS desktop)
 }
 
 const (
-	indexMarker      = `<html lang="en">`
-	indexReplacement = `<html lang="en" data-platform="linux">`
-	maxAPIBody       = 64 << 10
+	indexMarker = `<html lang="en">`
+	maxAPIBody  = 64 << 10
 )
 
 type asset struct {
@@ -41,7 +44,13 @@ func Handler(o Options) http.Handler {
 	if !bytes.Contains(raw, []byte(indexMarker)) {
 		panic("server: index.html lacks " + indexMarker)
 	}
-	index := bytes.Replace(raw, []byte(indexMarker), []byte(indexReplacement), 1)
+	platform := o.Platform
+	if platform == "" {
+		platform = "linux"
+	}
+	o.Prefix = strings.TrimRight(o.Prefix, "/")
+	replacement := fmt.Sprintf(`<html lang="en" data-platform=%q>`, platform)
+	index := bytes.Replace(raw, []byte(indexMarker), []byte(replacement), 1)
 	for _, ref := range [][2]string{
 		{"style.css", `href="style.css"`},
 		{"i18n.js", `src="i18n.js"`},
@@ -73,17 +82,38 @@ type handler struct {
 	lazy   map[string]string // served from o.Static on each request
 }
 
-func setSecurityHeaders(w http.ResponseWriter) {
+func (h *handler) setSecurityHeaders(w http.ResponseWriter) {
 	hd := w.Header()
-	hd.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
-	hd.Set("X-Frame-Options", "DENY")
+	if h.o.AllowFrame {
+		hd.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'")
+		hd.Set("X-Frame-Options", "SAMEORIGIN")
+	} else {
+		hd.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		hd.Set("X-Frame-Options", "DENY")
+	}
 	hd.Set("X-Content-Type-Options", "nosniff")
 	hd.Set("Referrer-Policy", "no-referrer")
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	setSecurityHeaders(w)
+	h.setSecurityHeaders(w)
 	path := r.URL.Path
+
+	if pfx := h.o.Prefix; pfx != "" {
+		if path == pfx {
+			// Ensure a trailing slash so relative asset and api.cgi URLs
+			// resolve under the gateway prefix.
+			target := pfx + "/"
+			if r.URL.RawQuery != "" {
+				target += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, target, http.StatusMovedPermanently)
+			return
+		}
+		if rest, ok := strings.CutPrefix(path, pfx+"/"); ok {
+			path = "/" + rest
+		}
+	}
 
 	if path == "/api.cgi" {
 		h.serveAPI(w, r)

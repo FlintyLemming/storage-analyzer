@@ -1,0 +1,17 @@
+{
+  ".url": {
+    "storage-analyzer.main": {
+      "title": "Storage Analyzer",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "",
+      "gatewayPrefix": "/app/storage-analyzer",
+      "gatewaySocket": "app.sock",
+      "url": "/app/storage-analyzer/",
+      "allUsers": false,
+      "control": {
+        "accessPerm": "readonly"
+      }
+    }
+  }
+}

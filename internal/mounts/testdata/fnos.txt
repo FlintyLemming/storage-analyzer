@@ -1,0 +1,13 @@
+24 30 0:22 / /sys rw,nosuid,nodev,noexec,relatime shared:7 - sysfs sysfs rw
+25 30 0:23 / /proc rw,nosuid,nodev,noexec,relatime shared:13 - proc proc rw
+26 30 0:6 / /dev rw,nosuid,relatime shared:2 - devtmpfs udev rw,size=8047560k,nr_inodes=2011890,mode=755,inode64
+28 30 0:25 / /run rw,nosuid,nodev,noexec,relatime shared:5 - tmpfs tmpfs rw,size=1626936k,mode=755,inode64
+30 1 8:18 / / rw,relatime shared:1 - ext4 /dev/sdb2 rw,errors=remount-ro
+96 30 8:17 / /boot/efi rw,relatime shared:33 - vfat /dev/sdb1 rw,fmask=0077,dmask=0077
+509 30 0:49 / /fs rw,relatime shared:240 - trimafs trimafs rw,trimacl,ino_mode=32
+524 30 253:1 / /vol2 rw,relatime shared:284 - ext4 /dev/mapper/trim_90e3f724_9ec9_49bf_9d8e_601c0cb0898f-0 rw,trimacl,prjquota
+539 30 253:0 / /vol1 rw,relatime shared:292 - ext4 /dev/mapper/trim_1b41985e_c99f_4425_b6d0_73cb3778e526-0 rw,trimacl,prjquota
+540 30 253:10 / /vol10 rw,relatime shared:295 - btrfs /dev/mapper/trim_aaaa_10-0 rw,subvolid=5,subvol=/
+541 30 8:33 / /vol00/USB_Backup rw,relatime shared:298 - exfat /dev/sdc1 rw
+542 30 0:55 / /vol02/smb_share rw,relatime shared:299 - cifs //192.168.1.2/share rw
+543 30 8:49 / /media/extdisk rw,relatime shared:300 - ntfs3 /dev/sdd1 rw

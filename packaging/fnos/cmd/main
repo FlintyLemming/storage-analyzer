@@ -1,0 +1,149 @@
+#!/bin/bash
+set -u
+
+BIN="${TRIM_APPDEST}/bin/storage-analyzer"
+DATA_DIR="${TRIM_PKGVAR}"
+CONF_FILE="${TRIM_PKGETC}/settings.conf"
+SOCKET_PATH="${TRIM_APPDEST}/app.sock"
+PID_FILE="${TRIM_PKGVAR}/run/app.pid"
+LOG_FILE="${TRIM_PKGVAR}/logs/service.log"
+GATEWAY_PREFIX="/app/storage-analyzer"
+
+log_msg() {
+    mkdir -p "${TRIM_PKGVAR}/logs"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}"
+}
+
+rotate_log() {
+    if [ -f "${LOG_FILE}" ]; then
+        local sz
+        sz="$(wc -c < "${LOG_FILE}" 2>/dev/null || echo 0)"
+        if [ "${sz}" -gt 1048576 ]; then
+            mv -f "${LOG_FILE}" "${LOG_FILE}.1" 2>/dev/null || true
+        fi
+    fi
+}
+
+check_process() {
+    local pid="$1"
+    [ -n "${pid}" ] || return 1
+    kill -0 "${pid}" 2>/dev/null || return 1
+    if [ -r "/proc/${pid}/cmdline" ]; then
+        tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null | grep -q "storage-analyzer" || return 1
+    fi
+    return 0
+}
+
+status_app() {
+    if [ -f "${PID_FILE}" ]; then
+        local pid
+        pid="$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')"
+        if check_process "${pid}"; then
+            return 0
+        fi
+        rm -f "${PID_FILE}"
+    fi
+    return 1
+}
+
+start_app() {
+    if status_app; then
+        return 0
+    fi
+
+    if [ ! -x "${BIN}" ]; then
+        if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+            echo "Storage Analyzer binary is missing or not executable." > "${TRIM_TEMP_LOGFILE}"
+        fi
+        return 1
+    fi
+
+    mkdir -p "${TRIM_PKGVAR}/run" "${TRIM_PKGVAR}/logs" "${TRIM_PKGVAR}/scans" "${TRIM_PKGETC}"
+    rotate_log
+    log_msg "Starting Storage Analyzer..."
+
+    "${BIN}" serve \
+        --data "${DATA_DIR}" \
+        --config "${CONF_FILE}" \
+        --socket "${SOCKET_PATH}" \
+        --prefix "${GATEWAY_PREFIX}" \
+        >> "${LOG_FILE}" 2>&1 &
+    local pid="$!"
+    printf "%s\n" "${pid}" > "${PID_FILE}"
+
+    # Wait briefly for the Unix socket to become ready and catch immediate startup failures.
+    local i=0
+    while [ "${i}" -lt 30 ]; do
+        if ! check_process "${pid}"; then
+            rm -f "${PID_FILE}"
+            log_msg "Storage Analyzer exited prematurely during startup."
+            if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+                tail -n 5 "${LOG_FILE}" > "${TRIM_TEMP_LOGFILE}" 2>/dev/null || \
+                    echo "Storage Analyzer failed to start." > "${TRIM_TEMP_LOGFILE}"
+            fi
+            return 1
+        fi
+        if [ -S "${SOCKET_PATH}" ]; then
+            log_msg "Storage Analyzer started (pid=${pid})."
+            return 0
+        fi
+        sleep 0.1
+        i=$((i + 1))
+    done
+
+    log_msg "Storage Analyzer started (pid=${pid}), waiting for socket timed out."
+    return 0
+}
+
+stop_app() {
+    log_msg "Stopping Storage Analyzer..."
+    if [ ! -f "${PID_FILE}" ]; then
+        rm -f "${SOCKET_PATH}"
+        return 0
+    fi
+
+    local pid
+    pid="$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')"
+    if ! check_process "${pid}"; then
+        rm -f "${PID_FILE}" "${SOCKET_PATH}"
+        return 0
+    fi
+
+    kill -TERM "${pid}" 2>> "${LOG_FILE}" || true
+    local i=0
+    while check_process "${pid}" && [ "${i}" -lt 30 ]; do
+        sleep 0.5
+        i=$((i + 1))
+    done
+
+    if check_process "${pid}"; then
+        log_msg "Force killing pid=${pid}"
+        kill -KILL "${pid}" 2>> "${LOG_FILE}" || true
+        sleep 0.5
+    fi
+
+    rm -f "${PID_FILE}" "${SOCKET_PATH}"
+    log_msg "Storage Analyzer stopped."
+    return 0
+}
+
+case "${1:-}" in
+    start)
+        start_app
+        ;;
+    stop)
+        stop_app
+        ;;
+    status)
+        if status_app; then
+            exit 0
+        fi
+        exit 3
+        ;;
+    *)
+        if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+            echo "Unknown command: ${1:-}" > "${TRIM_TEMP_LOGFILE}"
+        fi
+        exit 1
+        ;;
+esac

@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-An ncdu-style disk usage analyzer with a web interface, for QNAP QTS and for ordinary Linux servers. It scans your disks, lets you drill down folder by folder to see what is taking up space, finds files and folders with identical content, and keeps a history of past scans. On QNAP it opens as a window on the QTS desktop, like the built-in apps; on Linux it runs as a systemd service you open in the browser.
+An ncdu-style disk usage analyzer with a web interface, for QNAP QTS, fnOS (飞牛), and ordinary Linux servers. It scans your disks, lets you drill down folder by folder to see what is taking up space, finds files and folders with identical content, and keeps a history of past scans. On QNAP and fnOS it opens as a window on the NAS desktop, like the built-in apps; on Linux it runs as a systemd service you open in the browser.
 
 ![All volumes: capacity of each data volume, split into scanned files, space not accounted for, and free space](docs/images/volumes.png)
 
@@ -10,15 +10,15 @@ An ncdu-style disk usage analyzer with a web interface, for QNAP QTS and for ord
 
 ## Features
 
-- **Scans every data volume.** On QNAP, volumes on all storage pools are found automatically; system partitions are skipped, and so are volumes that aren't mounted, such as locked encrypted volumes. On Linux, local disk filesystems are discovered automatically, or you can list the directories to scan.
+- **Scans every data volume.** On QNAP, volumes on all storage pools are found automatically; system partitions are skipped, and so are volumes that aren't mounted, such as locked encrypted volumes. On fnOS, all storage spaces (`/vol1`, `/vol2`, …) are scanned automatically, with optional switches in App Settings to also include the system partition `/` or external storage. On Linux, local disk filesystems are discovered automatically, or you can list the directories to scan.
 - **Folder-by-folder drill-down.** Sort by size, name, item count or modified time. Switch between *Disk usage* (space taken on disk) and *Apparent size* (size of the file contents).
 - **Accounts for the whole volume.** Each volume's bar shows the scanned files, space that isn't accounted for by any file (snapshots, file system metadata, etc.) and free space.
 - **Duplicate finder.** Finds files and folders with identical content, verified with a full SHA-256 hash. When two whole folders are identical, only the largest identical folder is listed, not everything inside it.
 - **Scheduled or on-demand scans.** Run a scan by hand, or daily or weekly at a set time, optionally followed by a duplicate check.
 - **Scan history.** Keeps the most recent successful scans (10 by default), so you can open an older scan and browse it in full.
-- **Stays out of the way.** Scans and duplicate checks run at the lowest CPU and I/O priority. The QNAP version has no background process between them; the Linux version is a resident service that uses no CPU while idle.
-- **Delete files with safety guardrails.** Delete individual files or folders directly, or stage items across multiple folders and the Duplicates view in a **Delete basket** before removing them together. Volume roots, mount points, critical system paths and older scan snapshots are protected; Linux deployments can also disable deletion via `allow_delete = false`.
-- **English and Chinese UI**, following the QTS language on QNAP and the browser language on Linux.
+- **Stays out of the way.** Scans and duplicate checks run at the lowest CPU and I/O priority. The QNAP version has no background process between them; the fnOS and Linux versions are resident services that use no CPU while idle.
+- **Delete files with safety guardrails.** Delete individual files or folders directly, or stage items across multiple folders and the Duplicates view in a **Delete basket** before removing them together. Volume roots, mount points, critical system paths and older scan snapshots are protected; fnOS and Linux deployments can also disable deletion for read-only use.
+- **English and Chinese UI**, following the QTS language on QNAP and the browser language on fnOS and Linux.
 
 ## QNAP QTS
 
@@ -42,6 +42,31 @@ An ncdu-style disk usage analyzer with a web interface, for QNAP QTS and for ord
 4. Open **Storage Analyzer** from the QTS main menu.
 
 To update, install the newer `.qpkg` the same way. Your scan history and settings are kept.
+
+## fnOS (飞牛)
+
+### Requirements
+
+- fnOS `1.1.3100` or later (required for Unified Gateway)
+- One of these architectures:
+  - `x86`: x86_64 Intel and AMD devices
+  - `arm`: 64-bit ARM devices
+- A fnOS administrator account. The app shows every user's file names and is restricted to administrators via the fnOS Unified Gateway.
+
+### Installation
+
+1. Download `storage-analyzer_<version>_fnos_<arch>.fpk` for your device from [Releases](https://github.com/FlintyLemming/storage-analyzer/releases/latest).
+2. In **App Center**, click **Manual Install** (手动安装), choose the `.fpk` file, pick the storage volume to install to, and confirm. Or install over SSH:
+
+   ```bash
+   sudo appcenter-cli install-fpk storage-analyzer_<version>_fnos_x86.fpk
+   ```
+
+3. Open **Storage Analyzer** from the fnOS desktop or App Center.
+
+No extra port or separate password is needed: it registers on the fnOS Unified Gateway (`/app/storage-analyzer/`) over a local Unix socket (`app.sock`), reusing your fnOS administrator session and working over HTTP, HTTPS, and fnConnect.
+
+To configure optional settings (also scanning the system partition `/` or external storage, or disabling file deletion for read-only mode), open **App Center → Storage Analyzer → Settings**. Scan databases and logs live in the app's `@appdata` directory (`TRIM_PKGVAR`). To update, install the newer `.fpk`; scan history and settings are preserved.
 
 ## Linux
 
@@ -235,7 +260,7 @@ You need Go 1.26 or later and Docker. QNAP packaging uses QNAP's [QDK](https://g
 ./scripts/build.sh
 ```
 
-This runs the tests (including the Linux tests for every architecture, in Docker), cross-compiles the binary and writes `build/StorageAnalyzer_<version>_<arch>.qpkg` for `x86_64`, `arm_64` and `arm-x41`. For the Linux packages (`.tar.gz`, `.deb` and `.rpm`), run `./scripts/build-linux.sh`.
+This runs the tests (including the Linux tests for every architecture, in Docker), cross-compiles the binary and writes `build/StorageAnalyzer_<version>_<arch>.qpkg` for `x86_64`, `arm_64` and `arm-x41`. For the Linux packages (`.tar.gz`, `.deb` and `.rpm`), run `./scripts/build-linux.sh`. For the fnOS packages (`build/fnos/storage-analyzer_<version>_fnos_{x86,arm}.fpk`), run `./scripts/build-fnos.sh` (it uses `fnpack` from `PATH` or downloads it automatically; set `FNPACK_KEY` and `FNPACK_CERT` to sign with a fnOS developer certificate).
 
 To work on the UI locally, build a native binary, write a dev config file pointing at the folder you want to scan, and start the development server (it skips authentication and only listens on loopback):
 
@@ -250,7 +275,7 @@ Then open <http://127.0.0.1:8099/>.
 
 ## How it works
 
-A single static Go binary serves everything. On QNAP there's no resident process: it runs as a CGI program behind QTS's own web server, using the QTS administrator session, and is launched in the background when a scan or duplicate check starts. On Linux it runs as a resident systemd service with its own sign-in, and starts scans and duplicate checks as child processes. Scheduled scans are a line in the QTS crontab on QNAP. Each scan is saved as its own SQLite database, so opening an old scan is as fast as opening the latest. On QNAP, all data lives in the app's install folder and is removed when the app is uninstalled.
+A single static Go binary serves everything. On QNAP there's no resident process: it runs as a CGI program behind QTS's own web server, using the QTS administrator session, and is launched in the background when a scan or duplicate check starts; scheduled scans are a line in the QTS crontab. On fnOS it runs as a resident service listening only on the Unified Gateway Unix socket (`app.sock`), reusing the fnOS administrator session, with an in-process scheduler and child processes for scans, duplicate checks, and deletions; all data lives in the app's `@appdata` directory. On Linux it runs as a resident systemd service with its own sign-in, and starts scans and duplicate checks as child processes. Each scan is saved as its own SQLite database, so opening an old scan is as fast as opening the latest. On QNAP, all data lives in the app's install folder and is removed when the app is uninstalled.
 
 ## License
 

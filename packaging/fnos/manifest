@@ -1,0 +1,16 @@
+appname               = storage-analyzer
+version               = @VERSION@
+display_name          = Storage Analyzer
+desc                  = 图形化磁盘空间分析与重复文件清理工具（ncdu 风格）。扫描存储空间、逐层下钻查看目录占用、SHA-256 查找重复文件与文件夹、解析 Docker 空间占用，并支持定时扫描与历史对比。仅限管理员使用。
+source                = thirdparty
+platform              = @PLATFORM@
+maintainer            = FlintyLemming
+maintainer_url        = https://github.com/FlintyLemming/storage-analyzer
+distributor           = FlintyLemming
+distributor_url       = https://github.com/FlintyLemming/storage-analyzer
+os_min_version        = 1.1.3100
+desktop_uidir         = ui
+desktop_applaunchname = storage-analyzer.main
+ctl_stop              = true
+checkport             = false
+disable_authorization_path = true

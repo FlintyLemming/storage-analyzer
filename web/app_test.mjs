@@ -763,3 +763,19 @@ test('clearing basket via basket bar resets partial checkbox, size, share bar, a
   assert.equal(document.getElementById('dirSummary').querySelector('.summary-del'), null);
   assert.equal(findRowByName(document, '/mnt/extend').querySelector('.c-size .size-del'), null);
 });
+
+test('fnos platform uses fnOS wording, hides logout button, and does not show Linux password login on 401', async () => {
+  const { document, sandbox } = buildAppFixture(makeFixtureApi(), { lang: 'zh', platform: 'fnos' });
+  await flush();
+
+  assert.equal(sandbox.I18N.platform, 'fnos');
+  assert.equal(sandbox.I18N.t('auth.h'), '请先登录 fnOS');
+  assert.ok(!sandbox.I18N.t('auth.p').includes('QTS'));
+  assert.ok(document.getElementById('btnLogout').classList.contains('hidden'), 'fnOS should hide the standalone logout button');
+
+  // Verify en fnos wording too.
+  const enFix = buildAppFixture(makeFixtureApi(), { lang: 'en', platform: 'fnos' });
+  await flush();
+  assert.equal(enFix.sandbox.I18N.t('auth.h'), 'Please sign in to fnOS');
+  assert.ok(!enFix.sandbox.I18N.t('auth.p').includes('QTS'));
+});

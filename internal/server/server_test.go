@@ -176,3 +176,48 @@ func TestNewServerTimeouts(t *testing.T) {
 		t.Errorf("%+v", s)
 	}
 }
+
+func TestPrefixPlatformAndAllowFrame(t *testing.T) {
+	api := &stub{}
+	h := Handler(Options{
+		API:        api,
+		Static:     web.Files,
+		Platform:   "fnos",
+		Prefix:     "/app/storage-analyzer",
+		AllowFrame: true,
+	})
+
+	// Bare prefix redirects to trailing slash, preserving query string.
+	rec := do(h, "GET", "/app/storage-analyzer?lang=zh", nil)
+	if rec.Code != http.StatusMovedPermanently || rec.Header().Get("Location") != "/app/storage-analyzer/?lang=zh" {
+		t.Fatalf("bare prefix: code=%d loc=%q", rec.Code, rec.Header().Get("Location"))
+	}
+
+	// Trailing-slash root serves index with data-platform="fnos" and SAMEORIGIN framing.
+	rec = do(h, "GET", "/app/storage-analyzer/", nil)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `<html lang="en" data-platform="fnos">`) {
+		t.Fatalf("prefixed root: code=%d body=%q", rec.Code, rec.Body.String()[:min(120, rec.Body.Len())])
+	}
+	if got := rec.Header().Get("X-Frame-Options"); got != "SAMEORIGIN" {
+		t.Errorf("X-Frame-Options = %q, want SAMEORIGIN", got)
+	}
+	if got := rec.Header().Get("Content-Security-Policy"); !strings.Contains(got, "frame-ancestors 'self'") {
+		t.Errorf("CSP = %q, want frame-ancestors 'self'", got)
+	}
+
+	// Prefixed static asset & API work.
+	rec = do(h, "GET", "/app/storage-analyzer/app.js", nil)
+	if rec.Code != 200 || rec.Header().Get("Content-Type") != "text/javascript; charset=utf-8" {
+		t.Fatalf("prefixed app.js: code=%d ct=%q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	rec = do(h, "GET", "/app/storage-analyzer/api.cgi?action=status", nil)
+	if rec.Code != 200 || !api.called {
+		t.Fatalf("prefixed api.cgi: code=%d called=%v", rec.Code, api.called)
+	}
+
+	// Sibling prefix must NOT match.
+	rec = do(h, "GET", "/app/storage-analyzer2/app.js", nil)
+	if rec.Code != 404 {
+		t.Fatalf("sibling prefix: code=%d, want 404", rec.Code)
+	}
+}

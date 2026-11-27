@@ -1,0 +1,32 @@
+#!/bin/bash
+set -eu
+
+CONF_FILE="${TRIM_PKGETC}/settings.conf"
+
+norm_bool() {
+    local val="${1:-}"
+    local def="$2"
+    case "${val,,}" in
+        true|1|yes|on) echo "true" ;;
+        false|0|no|off) echo "false" ;;
+        *) echo "${def}" ;;
+    esac
+}
+
+mkdir -p "${TRIM_PKGETC}" "${TRIM_PKGVAR}/run" "${TRIM_PKGVAR}/logs" "${TRIM_PKGVAR}/scans"
+
+if [ ! -f "${CONF_FILE}" ]; then
+    inc_sys="$(norm_bool "${wizard_include_system:-}" "false")"
+    inc_ext="$(norm_bool "${wizard_include_external:-}" "false")"
+    allow_del="$(norm_bool "${wizard_allow_delete:-}" "true")"
+    cat > "${CONF_FILE}.tmp" <<EOF
+# Managed by Storage Analyzer fnOS package settings.
+include_system = ${inc_sys}
+include_external = ${inc_ext}
+allow_delete = ${allow_del}
+EOF
+    mv -f "${CONF_FILE}.tmp" "${CONF_FILE}"
+    chmod 600 "${CONF_FILE}"
+fi
+
+exit 0

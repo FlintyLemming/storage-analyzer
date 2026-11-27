@@ -103,12 +103,12 @@ func ResolveTargets(db *scandb.DB, roots map[int64]VolumeRoot, policy Policy, en
 		}
 
 		t := Target{
-			EntryID: self.ID,
-			Kind:    self.Kind,
-			DSize:   self.DSize,
-			ASize:   self.ASize,
-			Items:   self.Items,
-			BadName: self.Flags&scandb.FlagBadName != 0,
+			EntryID:  self.ID,
+			Kind:     self.Kind,
+			DSize:    self.DSize,
+			ASize:    self.ASize,
+			Items:    self.Items,
+			BadName:  self.Flags&scandb.FlagBadName != 0,
 			VolMount: filepath.Clean(root.MountPoint),
 		}
 		if self.Kind == scandb.KindDir {

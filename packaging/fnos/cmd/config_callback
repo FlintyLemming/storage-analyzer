@@ -1,0 +1,64 @@
+#!/bin/bash
+set -eu
+
+CONF_FILE="${TRIM_PKGETC}/settings.conf"
+CMD_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+read_existing() {
+    local key="$1"
+    local def="$2"
+    if [ -r "${CONF_FILE}" ]; then
+        local v
+        v="$(awk -F'=' -v k="${key}" '
+            /^[[:space:]]*#/ { next }
+            {
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1)
+                if ($1 == k) {
+                    gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
+                    print $2
+                }
+            }
+        ' "${CONF_FILE}" | tail -n 1)"
+        if [ -n "${v}" ]; then
+            echo "${v}"
+            return
+        fi
+    fi
+    echo "${def}"
+}
+
+norm_bool() {
+    local val="${1:-}"
+    local def="$2"
+    case "${val,,}" in
+        true|1|yes|on) echo "true" ;;
+        false|0|no|off) echo "false" ;;
+        *) echo "${def}" ;;
+    esac
+}
+
+mkdir -p "${TRIM_PKGETC}"
+
+cur_sys="$(read_existing include_system false)"
+cur_ext="$(read_existing include_external false)"
+cur_del="$(read_existing allow_delete true)"
+
+inc_sys="$(norm_bool "${wizard_include_system:-}" "${cur_sys}")"
+inc_ext="$(norm_bool "${wizard_include_external:-}" "${cur_ext}")"
+allow_del="$(norm_bool "${wizard_allow_delete:-}" "${cur_del}")"
+
+cat > "${CONF_FILE}.tmp" <<EOF
+# Managed by Storage Analyzer fnOS package settings.
+include_system = ${inc_sys}
+include_external = ${inc_ext}
+allow_delete = ${allow_del}
+EOF
+mv -f "${CONF_FILE}.tmp" "${CONF_FILE}"
+chmod 600 "${CONF_FILE}"
+
+if [ -x "${CMD_DIR}/main" ] && "${CMD_DIR}/main" status >/dev/null 2>&1; then
+    "${CMD_DIR}/main" stop
+    "${CMD_DIR}/main" start
+fi
+
+exit 0

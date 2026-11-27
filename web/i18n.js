@@ -421,6 +421,16 @@
     'dup.intro': '重复检查会读取大小相同的文件的内容，并用完整的校验值确认是否完全相同。第一次检查可能需要数小时，以最低优先级运行，不影响服务器的正常使用；之后再检查只会读取新增或改动过的文件。',
   };
 
+  // Wording for the fnOS build (<html data-platform="fnos">): keeps "NAS",
+  // replaces "QTS" with "fnOS" and mentions fnOS storage spaces.
+  const zhFnos = {
+    'err.not_logged_in': '请先登录 fnOS',
+    'err.auth_unavailable': '无法验证 fnOS 登录状态：{detail}',
+    'empty.p': '扫描会统计飞牛存储空间的空间占用，文件较多时需要几分钟到几十分钟。',
+    'auth.h': '请先登录 fnOS',
+    'auth.p': '登录已过期，请刷新 fnOS 页面后重新打开 Storage Analyzer。',
+  };
+
   const en = {
     'app.title': 'Storage Analyzer',
 
@@ -775,10 +785,20 @@
     'dup.intro': "A duplicate check reads the content of files that have the same size and compares full checksums to confirm they're identical. The first check can take hours. It runs at the lowest priority, so it won't slow down the server, and later checks only read new or changed files.",
   };
 
-  const platform = document.documentElement.dataset.platform === 'linux' ? 'linux' : 'qnap';
-  const dict = platform === 'linux'
-    ? Object.assign({}, lang === 'zh' ? zh : en, lang === 'zh' ? zhLinux : enLinux)
-    : (lang === 'zh' ? zh : en);
+  const enFnos = {
+    'err.not_logged_in': 'Please sign in to fnOS',
+    'err.auth_unavailable': "Couldn't check your fnOS sign-in: {detail}",
+    'empty.p': 'A scan measures the space used on your fnOS storage spaces. With many files it can take from a few minutes to an hour or so.',
+    'auth.h': 'Please sign in to fnOS',
+    'auth.p': 'Your session has expired. Reload fnOS and open Storage Analyzer again.',
+  };
+
+  const rawPlatform = document.documentElement.dataset.platform;
+  const platform = rawPlatform === 'linux' || rawPlatform === 'fnos' ? rawPlatform : 'qnap';
+  const overrides = platform === 'linux' ? (lang === 'zh' ? zhLinux : enLinux)
+    : platform === 'fnos' ? (lang === 'zh' ? zhFnos : enFnos)
+    : null;
+  const dict = overrides ? Object.assign({}, lang === 'zh' ? zh : en, overrides) : (lang === 'zh' ? zh : en);
 
   // t looks up a string and fills {name} placeholders from params; numbers
   // are formatted for the locale. Entries may also be functions of params
@@ -804,5 +824,5 @@
     for (const n of root.querySelectorAll('[data-i18n-aria-label]')) n.setAttribute('aria-label', t(n.dataset.i18nAriaLabel));
   }
 
-  window.I18N = { lang, locale, platform, t, num, apply, _dicts: { zh, en, zhLinux, enLinux } };
+  window.I18N = { lang, locale, platform, t, num, apply, _dicts: { zh, en, zhLinux, enLinux, zhFnos, enFnos } };
 })();

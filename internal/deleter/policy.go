@@ -24,15 +24,15 @@ const (
 // forbidden. Paths in ExactDeny cannot be deleted themselves, while entries
 // inside them remain deletable.
 type Policy struct {
-	Platform    string   // "linux" | "qnap"
+	Platform    string   // "linux" | "qnap" | "fnos"
 	AppDirs     []string // Storage Analyzer's own data/config/install directories
 	SubtreeDeny []string // OS-critical trees
 	ExactDeny   []string // top-level containers whose children may still be deleted
 }
 
 // DefaultPolicy builds the built-in path protection policy for platform
-// ("linux" or "qnap"), protecting dataDir and any extra app paths (config and
-// password files on Linux, install root directory on QNAP).
+// ("linux", "qnap", or "fnos"), protecting dataDir and any extra app paths
+// (config and password files on Linux, install root directory on QNAP/fnOS).
 func DefaultPolicy(platform, dataDir string, extraProtected ...string) Policy {
 	p := Policy{
 		Platform:  platform,
@@ -64,6 +64,10 @@ func DefaultPolicy(platform, dataDir string, extraProtected ...string) Policy {
 			"/var", "/var/lib", "/var/log", "/var/cache", "/var/tmp",
 			"/opt", "/srv", "/mnt", "/media",
 		)
+	}
+	if platform == "fnos" {
+		p.SubtreeDeny = append(p.SubtreeDeny, "/var/apps", "/fs")
+		p.ExactDeny = append(p.ExactDeny, "/vol00")
 	}
 	return p
 }
@@ -100,6 +104,13 @@ func (p Policy) Check(absPath string, depth int) string {
 	if p.Platform == "qnap" && depth == 1 {
 		switch filepath.Base(clean) {
 		case ".qpkg", "@Recycle", ".system":
+			return ReasonSystemPath
+		}
+	}
+	if p.Platform == "fnos" && depth == 1 {
+		switch filepath.Base(clean) {
+		case "@appcenter", "@appconf", "@appdata", "@apphome",
+			"@appmeta", "@apptemp", "@sysappmeta", "appcenter-downloads", "lost+found":
 			return ReasonSystemPath
 		}
 	}

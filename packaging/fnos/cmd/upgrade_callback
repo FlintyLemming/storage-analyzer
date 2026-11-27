@@ -1,0 +1,5 @@
+#!/bin/bash
+set -eu
+
+mkdir -p "${TRIM_PKGETC}" "${TRIM_PKGVAR}/run" "${TRIM_PKGVAR}/logs" "${TRIM_PKGVAR}/scans"
+exit 0

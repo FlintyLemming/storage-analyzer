@@ -28,15 +28,16 @@ import (
 
 // Config wires the handler to the filesystem and the outside world.
 type Config struct {
-	DataDir       string
-	BinPath       string
-	Auth          Authenticator
-	Discover      func() ([]volumes.Volume, []volumes.Skipped, error)
-	Spawn         func(args ...string) error   // nil: SpawnDetached(BinPath, args...)
-	ApplySchedule func(catalog.Settings) error // called after settings are saved; nil: nothing to do
-	LoginKind     string                       // non-empty: 401 responses carry "auth": LoginKind
-	DeleteEnabled bool
-	DeletePolicy  deleter.Policy
+	DataDir            string
+	BinPath            string
+	Auth               Authenticator
+	Discover           func() ([]volumes.Volume, []volumes.Skipped, error)
+	Spawn              func(args ...string) error   // nil: SpawnDetached(BinPath, args...)
+	ApplySchedule      func(catalog.Settings) error // called after settings are saved; nil: nothing to do
+	LoginKind          string                       // non-empty: 401 responses carry "auth": LoginKind
+	NotLoggedInMessage string                       // optional custom 401 message when LoginKind is empty
+	DeleteEnabled      bool
+	DeletePolicy       deleter.Policy
 }
 
 // Item is one entry as returned to the UI.
@@ -119,7 +120,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, ErrNotLoggedIn) {
 			msg := "not logged in to QTS"
-			if h.cfg.LoginKind != "" {
+			if h.cfg.NotLoggedInMessage != "" {
+				msg = h.cfg.NotLoggedInMessage
+			} else if h.cfg.LoginKind != "" {
 				msg = "not logged in"
 			}
 			body := map[string]string{"error": "not_logged_in", "message": msg}

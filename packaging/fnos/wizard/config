@@ -1,0 +1,29 @@
+[
+  {
+    "stepTitle": "扫描与安全设置",
+    "items": [
+      {
+        "type": "switch",
+        "field": "wizard_include_system",
+        "label": "同时扫描系统盘（/）",
+        "initValue": "false"
+      },
+      {
+        "type": "switch",
+        "field": "wizard_include_external",
+        "label": "同时扫描外接存储",
+        "initValue": "false"
+      },
+      {
+        "type": "switch",
+        "field": "wizard_allow_delete",
+        "label": "允许在网页中删除文件",
+        "initValue": "true"
+      },
+      {
+        "type": "tips",
+        "helpText": "默认仅扫描飞牛存储空间（/vol1、/vol2 等）。保存设置后服务将自动重启以使配置生效。"
+      }
+    ]
+  }
+]

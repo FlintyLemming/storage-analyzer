@@ -1,4 +1,4 @@
-//go:build !qnap
+//go:build !qnap && !fnos
 
 package main
 

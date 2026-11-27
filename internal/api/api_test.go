@@ -187,6 +187,45 @@ func TestQTSAuthParsesXML(t *testing.T) {
 	}
 }
 
+func TestFnOSAuth(t *testing.T) {
+	a := FnOSAuth{}
+
+	req := httptest.NewRequest("GET", "/api.cgi", nil)
+	if _, _, err := a.Check(req); !errors.Is(err, ErrNotLoggedIn) {
+		t.Fatalf("no headers: err = %v, want ErrNotLoggedIn", err)
+	}
+
+	req = httptest.NewRequest("GET", "/api.cgi", nil)
+	req.Header.Set("X-Trim-Userid", "1000")
+	req.Header.Set("X-Trim-Username", "admin")
+	req.Header.Set("X-Trim-Isadmin", "true")
+	if u, adm, err := a.Check(req); err != nil || u != "admin" || !adm {
+		t.Fatalf("admin: u=%q admin=%v err=%v", u, adm, err)
+	}
+
+	req = httptest.NewRequest("GET", "/api.cgi", nil)
+	req.Header.Set("X-Trim-Userid", "1001")
+	req.Header.Set("X-Trim-Username", "bob")
+	req.Header.Set("X-Trim-Isadmin", "false")
+	if u, adm, err := a.Check(req); err != nil || u != "bob" || adm {
+		t.Fatalf("user: u=%q admin=%v err=%v", u, adm, err)
+	}
+
+	// Missing X-Trim-Isadmin must never grant admin.
+	req = httptest.NewRequest("GET", "/api.cgi", nil)
+	req.Header.Set("X-Trim-Userid", "1002")
+	if u, adm, err := a.Check(req); err != nil || u != "1002" || adm {
+		t.Fatalf("uid-only: u=%q admin=%v err=%v", u, adm, err)
+	}
+
+	// Custom NotLoggedInMessage is reflected in 401 responses.
+	e := newEnvCfg(t, a, func(c *Config) { c.NotLoggedInMessage = "not logged in to fnOS" })
+	rr, m := e.do("GET", "/api.cgi?action=status", "", nil)
+	if rr.Code != 401 || m["error"] != "not_logged_in" || m["message"] != "not logged in to fnOS" {
+		t.Fatalf("fnos 401: code=%d body=%v", rr.Code, m)
+	}
+}
+
 func TestListRootAndDrill(t *testing.T) {
 	e := newEnv(t, admin())
 	id := e.makeScan()

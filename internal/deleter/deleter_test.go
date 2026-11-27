@@ -14,30 +14,30 @@ import (
 func TestDefaultPolicyLinux(t *testing.T) {
 	p := DefaultPolicy("linux", "/var/lib/storage-analyzer", "/etc/storage-analyzer")
 	blocked := map[string]int{
-		"/":                                   0,
-		"/mnt/data":                           0, // depth 0 volume root
-		"/etc":                                1,
-		"/etc/hosts":                          2,
-		"/etc/storage-analyzer/config":        3,
-		"/usr":                                1,
-		"/usr/bin/ls":                         3,
-		"/boot":                               1,
-		"/boot/vmlinuz":                       2,
-		"/bin":                                1,
-		"/lib64/libc.so.6":                    2,
-		"/proc/1":                             2,
-		"/sys/fs":                             2,
-		"/dev/null":                           2,
-		"/run/systemd":                        2,
-		"/var":                                1, // ancestor of dataDir AND exact deny
-		"/var/lib":                            2, // ancestor of dataDir AND exact deny
-		"/var/lib/storage-analyzer":           3,
+		"/":                                    0,
+		"/mnt/data":                            0, // depth 0 volume root
+		"/etc":                                 1,
+		"/etc/hosts":                           2,
+		"/etc/storage-analyzer/config":         3,
+		"/usr":                                 1,
+		"/usr/bin/ls":                          3,
+		"/boot":                                1,
+		"/boot/vmlinuz":                        2,
+		"/bin":                                 1,
+		"/lib64/libc.so.6":                     2,
+		"/proc/1":                              2,
+		"/sys/fs":                              2,
+		"/dev/null":                            2,
+		"/run/systemd":                         2,
+		"/var":                                 1, // ancestor of dataDir AND exact deny
+		"/var/lib":                             2, // ancestor of dataDir AND exact deny
+		"/var/lib/storage-analyzer":            3,
 		"/var/lib/storage-analyzer/catalog.db": 4,
-		"/home":                               1, // exact deny
-		"/tmp":                                1, // exact deny
-		"/var/log":                            2, // exact deny
-		"/opt":                                1, // exact deny
-		"/srv":                                1, // exact deny
+		"/home":                                1, // exact deny
+		"/tmp":                                 1, // exact deny
+		"/var/log":                             2, // exact deny
+		"/opt":                                 1, // exact deny
+		"/srv":                                 1, // exact deny
 	}
 	for path, depth := range blocked {
 		if reason := p.Check(path, depth); reason == "" {
@@ -86,6 +86,46 @@ func TestDefaultPolicyQNAP(t *testing.T) {
 	for path, depth := range allowed {
 		if reason := p.Check(path, depth); reason != "" {
 			t.Errorf("QNAP Check(%q, %d) = %q, want allowed", path, depth, reason)
+		}
+	}
+}
+
+func TestDefaultPolicyFnOS(t *testing.T) {
+	p := DefaultPolicy("fnos", "/vol1/@appdata/storage-analyzer", "/vol1/@appcenter/storage-analyzer", "/vol1/@appconf/storage-analyzer")
+	blocked := map[string]int{
+		"/vol1":                           0,
+		"/vol1/@appcenter":                1,
+		"/vol1/@appconf":                  1,
+		"/vol1/@appdata":                  1,
+		"/vol1/@apphome":                  1,
+		"/vol1/@appmeta":                  1,
+		"/vol1/@apptemp":                  1,
+		"/vol1/@sysappmeta":               1,
+		"/vol1/appcenter-downloads":       1,
+		"/vol1/lost+found":                1,
+		"/vol1/@appdata/storage-analyzer": 2,
+		"/vol1/@appdata/storage-analyzer/catalog.db": 3,
+		"/vol1/@appcenter/storage-analyzer/bin":      3,
+		"/var/apps":                                  2,
+		"/var/apps/storage-analyzer":                 3,
+		"/fs/1000":                                   2,
+		"/etc/hosts":                                 2,
+		"/vol00":                                     1,
+	}
+	for path, depth := range blocked {
+		if reason := p.Check(path, depth); reason == "" {
+			t.Errorf("fnOS Check(%q, %d) = allowed, want blocked", path, depth)
+		}
+	}
+	allowed := map[string]int{
+		"/vol1/1000/Movies/old.mkv":     3,
+		"/vol2/1000/Downloads/test.zip": 3,
+		"/vol1/docker/overlay2/abc":     3,
+		"/vol00/USB1/temp.iso":          2,
+	}
+	for path, depth := range allowed {
+		if reason := p.Check(path, depth); reason != "" {
+			t.Errorf("fnOS Check(%q, %d) = %q, want allowed", path, depth, reason)
 		}
 	}
 }
