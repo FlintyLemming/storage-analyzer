@@ -25,6 +25,7 @@ type Config struct {
 	DataDir        string         // default "/var/lib/storage-analyzer"
 	Paths          []string       // nil = auto-discover
 	Exclude        []string
+	AllowDelete    bool   // default true; false disables web file deletion
 	Dir            string // directory of the config file (set by Load)
 }
 
@@ -52,7 +53,7 @@ func Load(path string) (Config, error) {
 
 // Parse parses config text. Dir is left empty.
 func Parse(r io.Reader) (Config, error) {
-	c := Config{Listen: ":8099", DataDir: "/var/lib/storage-analyzer"}
+	c := Config{Listen: ":8099", DataDir: "/var/lib/storage-analyzer", AllowDelete: true}
 	seen := map[string]bool{}
 	certLine, keyLine := 0, 0
 
@@ -103,6 +104,15 @@ func Parse(r io.Reader) (Config, error) {
 			}
 		case "exclude":
 			c.Exclude, err = absList(k, v)
+		case "allow_delete":
+			switch v {
+			case "true":
+				c.AllowDelete = true
+			case "false":
+				c.AllowDelete = false
+			default:
+				err = fmt.Errorf("allow_delete: expected true or false, got %q", v)
+			}
 		default:
 			err = fmt.Errorf("unknown key %q", k)
 		}

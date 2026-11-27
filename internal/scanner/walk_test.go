@@ -286,3 +286,123 @@ func TestWalkRootSlashPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestWalkCrossesAllowedSubvolumeBoundary(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "root.bin"), 100)
+	write(t, filepath.Join(root, "subvol/data.bin"), 200)
+	write(t, filepath.Join(root, "subvol/inner/nested.bin"), 300)
+	write(t, filepath.Join(root, "subvol/snap/copied.bin"), 400)
+
+	subvolPath := filepath.Join(root, "subvol")
+	snapPath := filepath.Join(root, "subvol/snap")
+
+	// Simulate distinct st_dev per Btrfs subvolume: root=10, subvol=20, snap=30.
+	// Also give root.bin and subvol/data.bin the same inode with nlink=2 to prove
+	// cross-subvolume files with identical inode numbers are not merged as hardlinks.
+	fakeStat := func(p string, st *syscall.Stat_t) error {
+		if err := syscall.Lstat(p, st); err != nil {
+			return err
+		}
+		switch {
+		case p == snapPath || strings.HasPrefix(p, snapPath+"/"):
+			st.Dev = 30
+		case p == subvolPath || strings.HasPrefix(p, subvolPath+"/"):
+			st.Dev = 20
+		default:
+			st.Dev = 10
+		}
+		if filepath.Base(p) == "root.bin" || filepath.Base(p) == "data.bin" {
+			st.Ino = 777
+			st.Nlink = 2
+		}
+		return nil
+	}
+
+	w := &Walker{
+		lstat: fakeStat,
+		IsMountPoint: func(path string, parentDev, dev uint64) bool {
+			if dev == parentDev {
+				return false
+			}
+			// Allow descending into subvol, skip snap.
+			return path != subvolPath
+		},
+	}
+	s := walk(t, w, Root{Name: "Vol", Path: root})
+
+	sv := s.byName(t, 1, "subvol")
+	if sv.Kind != scandb.KindDir {
+		t.Fatalf("subvol kind = %d, want KindDir", sv.Kind)
+	}
+	data := s.byName(t, sv.ID, "data.bin")
+	if data.Kind != scandb.KindFile || data.ASize != 200 {
+		t.Fatalf("data.bin = %+v, want KindFile with ASize 200", data)
+	}
+	if data.Flags&scandb.FlagHardlinkDup != 0 {
+		t.Fatalf("data.bin wrongly tagged as hardlink dup across subvolumes")
+	}
+	inner := s.byName(t, sv.ID, "inner")
+	if inner.Kind != scandb.KindDir {
+		t.Fatalf("inner = %+v, want KindDir", inner)
+	}
+	nested := s.byName(t, inner.ID, "nested.bin")
+	if nested.Kind != scandb.KindFile || nested.ASize != 300 {
+		t.Fatalf("nested.bin = %+v, want KindFile with ASize 300", nested)
+	}
+	snap := s.byName(t, sv.ID, "snap")
+	if snap.Kind != scandb.KindMount || snap.NChild != 0 {
+		t.Fatalf("snap = %+v, want skipped KindMount", snap)
+	}
+	if got := w.Stats.Files.Load(); got != 3 {
+		t.Fatalf("Files = %d, want 3 (root.bin, data.bin, nested.bin)", got)
+	}
+}
+
+func TestWalkerWatchDirOnDir(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "docker/overlay2/layerA/diff/f"), 10)
+	write(t, filepath.Join(root, "docker/overlay2/backingFsBlockDev"), 0)
+	write(t, filepath.Join(root, "other/x"), 5)
+
+	var mu sync.Mutex
+	type call struct {
+		id   int64
+		path string
+		kids []DirChild
+	}
+	var calls []call
+	w := &Walker{
+		Workers: 4,
+		WatchDir: func(dirPath string) bool {
+			return filepath.Base(dirPath) == "overlay2"
+		},
+		OnDir: func(dirID int64, dirPath string, children []DirChild) {
+			mu.Lock()
+			calls = append(calls, call{id: dirID, path: dirPath, kids: children})
+			mu.Unlock()
+		},
+	}
+	s := walk(t, w, Root{Name: "Vol", Path: root})
+
+	if len(calls) != 1 {
+		t.Fatalf("OnDir calls = %d, want 1", len(calls))
+	}
+	dockerDir := s.byName(t, 1, "docker")
+	ovDir := s.byName(t, dockerDir.ID, "overlay2")
+	if calls[0].id != ovDir.ID || calls[0].path != filepath.Join(root, "docker/overlay2") {
+		t.Fatalf("call = %+v, want id=%d", calls[0], ovDir.ID)
+	}
+	byName := map[string]DirChild{}
+	for _, k := range calls[0].kids {
+		byName[k.Name] = k
+	}
+	layerA := s.byName(t, ovDir.ID, "layerA")
+	dev := s.byName(t, ovDir.ID, "backingFsBlockDev")
+	if byName["layerA"].ID != layerA.ID || byName["layerA"].Kind != scandb.KindDir {
+		t.Fatalf("layerA child = %+v, want id=%d KindDir", byName["layerA"], layerA.ID)
+	}
+	if byName["backingFsBlockDev"].ID != dev.ID || byName["backingFsBlockDev"].Kind != scandb.KindFile {
+		t.Fatalf("dev child = %+v, want id=%d KindFile", byName["backingFsBlockDev"], dev.ID)
+	}
+}

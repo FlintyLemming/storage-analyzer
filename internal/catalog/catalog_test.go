@@ -234,3 +234,43 @@ func TestMarkStaleRunningDupCheck(t *testing.T) {
 		t.Fatalf("stale check = %+v", d)
 	}
 }
+
+func TestAdjustScanTotalsAndDupSummary(t *testing.T) {
+	c, dir := open(t)
+	id := doneScan(t, c, dir, t0)
+	if err := c.Finish(Scan{ID: id, FinishedAt: t0.Unix() + 60, TotalDSize: 500, TotalASize: 600, Files: 20, Dirs: 5}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AdjustScanTotals(id, 150, 200, 4, 2); err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.TotalDSize != 350 || s.TotalASize != 400 || s.Files != 16 || s.Dirs != 3 {
+		t.Fatalf("adjusted scan = %+v", s)
+	}
+	// Clamps at 0 rather than going negative.
+	if err := c.AdjustScanTotals(id, 9999, 9999, 9999, 9999); err != nil {
+		t.Fatal(err)
+	}
+	s, _ = c.Get(id)
+	if s.TotalDSize != 0 || s.TotalASize != 0 || s.Files != 0 || s.Dirs != 0 {
+		t.Fatalf("clamped scan = %+v", s)
+	}
+
+	if err := c.BeginDupCheck(id, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.FinishDupCheck(DupCheck{ScanID: id, FinishedAt: t0.Unix() + 90, Groups: 5, ReclaimDSize: 1000, ReclaimASize: 1100}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.UpdateDupSummary(id, 2, 300, 350); err != nil {
+		t.Fatal(err)
+	}
+	d, err := c.GetDupCheck(id)
+	if err != nil || d.Groups != 2 || d.ReclaimDSize != 300 || d.ReclaimASize != 350 {
+		t.Fatalf("updated dup = %+v err=%v", d, err)
+	}
+}

@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/FlintyLemming/storage-analyzer/internal/catalog"
+	"github.com/FlintyLemming/storage-analyzer/internal/deleter"
 	"github.com/FlintyLemming/storage-analyzer/internal/dupcheck"
 	"github.com/FlintyLemming/storage-analyzer/internal/runner"
 	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
+	"github.com/FlintyLemming/storage-analyzer/internal/volumes"
 )
 
 type fakeAuth struct {
@@ -506,5 +508,235 @@ func TestScansIncludeDup(t *testing.T) {
 	dup := m["scans"].([]any)[0].(map[string]any)["dup"].(map[string]any)
 	if dup["status"] != "done" || dup["groups"].(float64) != 1 || dup["reclaimDSize"].(float64) != 10 {
 		t.Fatalf("dup = %v", dup)
+	}
+}
+
+func TestVolumesReturnsDiscoveredAndSkipped(t *testing.T) {
+	dir := t.TempDir()
+	e := newEnvCfg(t, admin(), func(c *Config) {
+		c.Discover = func() ([]volumes.Volume, []volumes.Skipped, error) {
+			return []volumes.Volume{
+					{Name: "/data", Device: "/dev/nvme0n1p2", MountPoint: dir, FSType: "ext4"},
+				},
+				[]volumes.Skipped{{Name: "/missing", Reason: "not_found"}}, nil
+		}
+	})
+	rr, m := e.do("GET", "/api.cgi?action=volumes", "", nil)
+	if rr.Code != 200 {
+		t.Fatalf("code=%d body=%v", rr.Code, m)
+	}
+	vols := m["volumes"].([]any)
+	if len(vols) != 1 {
+		t.Fatalf("volumes = %v", vols)
+	}
+	v := vols[0].(map[string]any)
+	if v["name"] != "/data" || v["device"] != "/dev/nvme0n1p2" || v["mountPoint"] != dir || v["fsType"] != "ext4" || v["entryId"].(float64) != 0 || v["fsTotal"].(float64) <= 0 {
+		t.Fatalf("vol = %v", v)
+	}
+	sk := m["skipped"].([]any)
+	if len(sk) != 1 || sk[0].(map[string]any)["name"] != "/missing" || sk[0].(map[string]any)["reason"] != "not_found" {
+		t.Fatalf("skipped = %v", sk)
+	}
+
+	eEmpty := newEnvCfg(t, admin(), func(c *Config) {
+		c.Discover = func() ([]volumes.Volume, []volumes.Skipped, error) { return nil, nil, nil }
+	})
+	rr, m = eEmpty.do("GET", "/api.cgi?action=volumes", "", nil)
+	if rr.Code != 200 || len(m["volumes"].([]any)) != 0 || len(m["skipped"].([]any)) != 0 {
+		t.Fatalf("empty code=%d body=%v", rr.Code, m)
+	}
+}
+
+func TestVolumesRequiresAuth(t *testing.T) {
+	e := newEnvCfg(t, fakeAuth{err: ErrNotLoggedIn}, func(c *Config) {
+		c.Discover = func() ([]volumes.Volume, []volumes.Skipped, error) {
+			t.Fatal("Discover must not run without auth")
+			return nil, nil, nil
+		}
+	})
+	rr, m := e.do("GET", "/api.cgi?action=volumes", "", nil)
+	if rr.Code != 401 || m["error"] != "not_logged_in" {
+		t.Fatalf("code=%d body=%v", rr.Code, m)
+	}
+	e2 := newEnv(t, fakeAuth{user: "bob"})
+	rr, m = e2.do("GET", "/api.cgi?action=volumes", "", nil)
+	if rr.Code != 403 || m["error"] != "not_admin" {
+		t.Fatalf("code=%d body=%v", rr.Code, m)
+	}
+}
+
+func TestVolumesErrors(t *testing.T) {
+	e := newEnvCfg(t, admin(), func(c *Config) {
+		c.Discover = func() ([]volumes.Volume, []volumes.Skipped, error) {
+			return nil, nil, errors.New("boom")
+		}
+	})
+	rr, m := e.do("GET", "/api.cgi?action=volumes", "", nil)
+	if rr.Code != 500 || m["error"] != "internal" {
+		t.Fatalf("code=%d body=%v", rr.Code, m)
+	}
+	eNil := newEnv(t, admin())
+	rr, m = eNil.do("GET", "/api.cgi?action=volumes", "", nil)
+	if rr.Code != 500 || m["error"] != "internal" {
+		t.Fatalf("nil discover code=%d body=%v", rr.Code, m)
+	}
+}
+
+func TestListIncludesDockerAnnotations(t *testing.T) {
+	e := newEnv(t, admin())
+	c, err := catalog.Open(e.data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := c.Begin("manual", time.Unix(1700000000, 0))
+	w, err := scandb.Create(catalog.ScanPath(e.data, id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, en := range []scandb.Entry{
+		{ID: 1, Name: []byte("Vol"), Kind: scandb.KindDir, DSize: 200, ASize: 200, Items: 3, FirstChild: 2, NChild: 1},
+		{ID: 2, Parent: 1, Name: []byte("overlay2"), Kind: scandb.KindDir, DSize: 200, ASize: 200, Items: 2, FirstChild: 3, NChild: 2},
+		{ID: 3, Parent: 2, Name: []byte("t8zqkoht5zlcn2c5zobnuc780"), Kind: scandb.KindDir, DSize: 150, ASize: 150, Items: 1, FirstChild: 5, NChild: 1},
+		{ID: 4, Parent: 2, Name: []byte("plain"), Kind: scandb.KindFile, DSize: 50, ASize: 50},
+		{ID: 5, Parent: 3, Name: []byte("diff"), Kind: scandb.KindDir, DSize: 150, ASize: 150},
+	} {
+		w.Add(en)
+	}
+	w.AddAnnotation(2, "docker", `{"type":"dir_overlay2","warnings":["buildkit"]}`)
+	w.AddAnnotation(3, "docker", `{"type":"image_layer","label":"demo:v1","count":1}`)
+	w.SetMeta(scandb.MetaRoots, "1")
+	w.SetMeta(runner.MetaVolumes, "[]")
+	w.SetMeta(runner.MetaSkipped, "[]")
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	c.Finish(catalog.Scan{ID: id, FinishedAt: 1700000060, TotalDSize: 200, Files: 1})
+	c.Close()
+
+	// Listing overlay2 (dir=2): dir carries dir_overlay2, item 3 carries image_layer, item 4 omits docker.
+	rr, m := e.do("GET", "/api.cgi?action=list&scan="+itoa(id)+"&dir=2", "", nil)
+	if rr.Code != 200 {
+		t.Fatalf("code=%d body=%v", rr.Code, m)
+	}
+	dirObj := m["dir"].(map[string]any)
+	dirDk := dirObj["docker"].(map[string]any)
+	if dirDk["type"] != "dir_overlay2" {
+		t.Fatalf("dir.docker = %v", dirDk)
+	}
+	items := m["items"].([]any)
+	first := items[0].(map[string]any)
+	second := items[1].(map[string]any)
+	if first["docker"].(map[string]any)["label"] != "demo:v1" {
+		t.Fatalf("first.docker = %v", first["docker"])
+	}
+	if _, has := second["docker"]; has {
+		t.Fatalf("plain entry should omit docker: %v", second)
+	}
+
+	// Drilling into diff (dir=5): path[2] (id=3) carries its docker annotation for breadcrumbs!
+	_, m = e.do("GET", "/api.cgi?action=list&scan="+itoa(id)+"&dir=5", "", nil)
+	path := m["path"].([]any)
+	if len(path) != 4 || path[2].(map[string]any)["docker"].(map[string]any)["label"] != "demo:v1" {
+		t.Fatalf("path = %v", path)
+	}
+}
+
+func TestStatusIncludesDeleteEnabledAndLastDelete(t *testing.T) {
+	e := newEnvCfg(t, admin(), func(c *Config) { c.DeleteEnabled = true })
+	_, m := e.do("GET", "/api.cgi?action=status", "", nil)
+	if m["deleteEnabled"] != true {
+		t.Fatalf("deleteEnabled = %v, want true", m["deleteEnabled"])
+	}
+	if _, has := m["lastDelete"]; has {
+		t.Fatalf("unexpected lastDelete when none exists: %v", m["lastDelete"])
+	}
+	// Write a lastDelete record and verify it appears.
+	os.MkdirAll(filepath.Join(e.data, "run"), 0o755)
+	b, _ := json.Marshal(runner.DeleteResult{ID: "del-1", ScanID: 1, Status: "done", Succeeded: 2, DeletedIDs: []int64{2, 3}})
+	os.WriteFile(runner.LastDeletePath(e.data), b, 0o644)
+	_, m = e.do("GET", "/api.cgi?action=status", "", nil)
+	ld, ok := m["lastDelete"].(map[string]any)
+	if !ok || ld["id"] != "del-1" || ld["status"] != "done" {
+		t.Fatalf("lastDelete = %v", m["lastDelete"])
+	}
+}
+
+func TestDeleteEndpointsValidationAndSpawn(t *testing.T) {
+	vol := t.TempDir()
+	e := newEnvCfg(t, admin(), func(c *Config) {
+		c.DeleteEnabled = true
+		c.DeletePolicy = deleter.DefaultPolicy("linux", c.DataDir, "")
+	})
+	makeVolScan := func() int64 {
+		c, _ := catalog.Open(e.data)
+		defer c.Close()
+		id, _ := c.Begin("manual", time.Unix(1700000000, 0))
+		w, _ := scandb.Create(catalog.ScanPath(e.data, id))
+		for _, en := range []scandb.Entry{
+			{ID: 1, Name: []byte(vol), Kind: scandb.KindDir, DSize: 1100, ASize: 1100, Items: 3, FirstChild: 2, NChild: 2},
+			{ID: 2, Parent: 1, Name: []byte("dir"), Kind: scandb.KindDir, DSize: 1000, ASize: 1000, Items: 1, FirstChild: 4, NChild: 1},
+			{ID: 3, Parent: 1, Name: []byte("overlay2"), Kind: scandb.KindDir, DSize: 100, ASize: 100, Items: 0},
+			{ID: 4, Parent: 2, Name: []byte("f"), Kind: scandb.KindFile, DSize: 1000, ASize: 1000},
+		} {
+			w.Add(en)
+		}
+		w.AddAnnotation(3, "docker", `{"type":"dir_overlay2"}`)
+		w.SetMeta(scandb.MetaRoots, "1")
+		vj, _ := json.Marshal([]runner.VolumeMeta{{EntryID: 1, Name: vol, MountPoint: vol}})
+		w.SetMeta(runner.MetaVolumes, string(vj))
+		w.SetMeta(runner.MetaSkipped, "[]")
+		w.Close()
+		c.Finish(catalog.Scan{ID: id, FinishedAt: 1700000060, TotalDSize: 1100, Files: 1})
+		return id
+	}
+
+	oldID := makeVolScan()
+	latestID := makeVolScan()
+
+	// GET rejected with 405.
+	if rr, _ := e.do("GET", "/api.cgi?action=delete_preview", "", post); rr.Code != 405 {
+		t.Fatalf("GET preview code=%d", rr.Code)
+	}
+	if rr, _ := e.do("GET", "/api.cgi?action=delete_start", "", post); rr.Code != 405 {
+		t.Fatalf("GET start code=%d", rr.Code)
+	}
+	// Missing CSRF header rejected with 403.
+	if rr, _ := e.do("POST", "/api.cgi?action=delete_start", `{"scanId":`+itoa(latestID)+`,"entryIds":[2]}`, nil); rr.Code != 403 {
+		t.Fatalf("no-csrf code=%d", rr.Code)
+	}
+	// Old scan rejected with 409 not_latest_scan.
+	if rr, m := e.do("POST", "/api.cgi?action=delete_preview", `{"scanId":`+itoa(oldID)+`,"entryIds":[2]}`, post); rr.Code != 409 || m["error"] != "not_latest_scan" {
+		t.Fatalf("old scan preview: %d %v", rr.Code, m)
+	}
+	// Preview folds child (4) into dir (2) and detects docker risk on (3).
+	rr, m := e.do("POST", "/api.cgi?action=delete_preview", `{"scanId":`+itoa(latestID)+`,"entryIds":[2,4,3]}`, post)
+	if rr.Code != 200 || m["folded"].(float64) != 1 || m["hasDockerRisk"] != true || m["hasProtected"] != false {
+		t.Fatalf("preview = %d %v", rr.Code, m)
+	}
+	// Start on protected volume root (1) rejected with 403 protected_path.
+	if rr, m := e.do("POST", "/api.cgi?action=delete_start", `{"scanId":`+itoa(latestID)+`,"entryIds":[1]}`, post); rr.Code != 403 || m["error"] != "protected_path" {
+		t.Fatalf("protected start: %d %v", rr.Code, m)
+	}
+	// Start on Docker dir without confirmDocker rejected with 400 docker_confirm_required.
+	if rr, m := e.do("POST", "/api.cgi?action=delete_start", `{"scanId":`+itoa(latestID)+`,"entryIds":[3]}`, post); rr.Code != 400 || m["error"] != "docker_confirm_required" {
+		t.Fatalf("docker unconfirmed: %d %v", rr.Code, m)
+	}
+	// Start on Docker dir WITH confirmDocker spawns delete worker!
+	rr, m = e.do("POST", "/api.cgi?action=delete_start", `{"scanId":`+itoa(latestID)+`,"entryIds":[2,4,3],"confirmDocker":true}`, post)
+	if rr.Code != 202 || m["started"] != true || m["targets"].(float64) != 2 || m["jobId"] == "" {
+		t.Fatalf("valid start = %d %v", rr.Code, m)
+	}
+	if len(e.spawned) != 1 || len(e.spawned[0]) != 3 || e.spawned[0][0] != "delete" || e.spawned[0][1] != "--request" {
+		t.Fatalf("spawned = %v", e.spawned)
+	}
+	reqFile, err := runner.ReadDeleteRequest(e.spawned[0][2])
+	if err != nil || reqFile.ScanID != latestID || len(reqFile.EntryIDs) != 2 || !reqFile.ConfirmDocker {
+		t.Fatalf("reqFile = %+v err=%v", reqFile, err)
+	}
+
+	// Disabled delete returns 403 delete_disabled.
+	eDis := newEnvCfg(t, admin(), func(c *Config) { c.DeleteEnabled = false })
+	if rr, m := eDis.do("POST", "/api.cgi?action=delete_start", `{"scanId":1,"entryIds":[2]}`, post); rr.Code != 403 || m["error"] != "delete_disabled" {
+		t.Fatalf("disabled start: %d %v", rr.Code, m)
 	}
 }

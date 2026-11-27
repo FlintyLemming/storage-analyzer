@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 )
 
 // OutMember is one copy as stored in a result database.
@@ -239,4 +240,174 @@ func (r *Result) Meta() (map[string]string, error) {
 		m[k] = v
 	}
 	return m, errors.Join(rows.Err())
+}
+
+// PruneSummary describes the state of a duplicate result database after
+// PruneDeleted removes deleted entries.
+type PruneSummary struct {
+	Changed      bool
+	Groups       int64
+	ReclaimDSize int64
+	ReclaimASize int64
+}
+
+func pathMatchesAny(path []byte, prefixes [][]byte) bool {
+	for _, p := range prefixes {
+		if len(p) == 0 {
+			continue
+		}
+		if bytes.Equal(path, p) {
+			return true
+		}
+		if len(path) > len(p) && bytes.HasPrefix(path, p) {
+			if p[len(p)-1] == '/' || path[len(p)] == '/' {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// PruneDeleted removes members matching deletedEntryIDs or lying under any
+// display path in deletedDisplayPaths from the duplicate result database at
+// path, recomputes affected group counts/reclaimable sizes, deletes groups
+// reduced below 2 copies, and updates meta totals.
+func PruneDeleted(path string, deletedEntryIDs []int64, deletedDisplayPaths [][]byte) (PruneSummary, error) {
+	if len(deletedEntryIDs) == 0 && len(deletedDisplayPaths) == 0 {
+		return PruneSummary{}, nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return PruneSummary{}, err
+	}
+	dsn := "file:" + (&url.URL{Path: path}).EscapedPath() + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(DELETE)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return PruneSummary{}, err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	tx, err := db.Begin()
+	if err != nil {
+		return PruneSummary{}, err
+	}
+	defer tx.Rollback()
+
+	idSet := make(map[int64]bool, len(deletedEntryIDs))
+	for _, id := range deletedEntryIDs {
+		idSet[id] = true
+	}
+
+	rows, err := tx.Query("SELECT rowid, group_id, entry_id, path FROM members")
+	if err != nil {
+		return PruneSummary{}, err
+	}
+	var delRowIDs []int64
+	affected := map[int64]bool{}
+	for rows.Next() {
+		var rowID, gid, eid int64
+		var mpath []byte
+		if err := rows.Scan(&rowID, &gid, &eid, &mpath); err != nil {
+			rows.Close()
+			return PruneSummary{}, err
+		}
+		if idSet[eid] || pathMatchesAny(mpath, deletedDisplayPaths) {
+			delRowIDs = append(delRowIDs, rowID)
+			affected[gid] = true
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return PruneSummary{}, err
+	}
+	if len(delRowIDs) == 0 {
+		return PruneSummary{Changed: false}, nil
+	}
+
+	delMemStmt, err := tx.Prepare("DELETE FROM members WHERE rowid = ?")
+	if err != nil {
+		return PruneSummary{}, err
+	}
+	defer delMemStmt.Close()
+	for _, rid := range delRowIDs {
+		if _, err := delMemStmt.Exec(rid); err != nil {
+			return PruneSummary{}, err
+		}
+	}
+
+	for gid := range affected {
+		mr, err := tx.Query("SELECT path, covered FROM members WHERE group_id = ? ORDER BY path", gid)
+		if err != nil {
+			return PruneSummary{}, err
+		}
+		var firstPath []byte
+		var remCount, coveredCount int64
+		for mr.Next() {
+			var mp []byte
+			var cov bool
+			if err := mr.Scan(&mp, &cov); err != nil {
+				mr.Close()
+				return PruneSummary{}, err
+			}
+			if remCount == 0 {
+				firstPath = append([]byte(nil), mp...)
+			}
+			remCount++
+			if cov {
+				coveredCount++
+			}
+		}
+		mr.Close()
+		if err := mr.Err(); err != nil {
+			return PruneSummary{}, err
+		}
+		if remCount < 2 {
+			if _, err := tx.Exec("DELETE FROM groups WHERE id = ?", gid); err != nil {
+				return PruneSummary{}, err
+			}
+			if _, err := tx.Exec("DELETE FROM members WHERE group_id = ?", gid); err != nil {
+				return PruneSummary{}, err
+			}
+			continue
+		}
+		var dsize, asize, oldRD, oldRA int64
+		if err := tx.QueryRow("SELECT dsize, asize, rdsize, rasize FROM groups WHERE id = ?", gid).Scan(&dsize, &asize, &oldRD, &oldRA); err != nil {
+			return PruneSummary{}, err
+		}
+		newRD := dsize * (remCount - 1)
+		newRA := asize * (remCount - 1)
+		if coveredCount > 0 {
+			if oldRD < newRD {
+				newRD = oldRD
+			}
+			if oldRA < newRA {
+				newRA = oldRA
+			}
+		}
+		name := firstPath[bytes.LastIndexByte(firstPath, '/')+1:]
+		if _, err := tx.Exec("UPDATE groups SET name = ?, copies = ?, rdsize = ?, rasize = ? WHERE id = ?",
+			name, remCount, newRD, newRA, gid); err != nil {
+			return PruneSummary{}, err
+		}
+	}
+
+	var sum PruneSummary
+	sum.Changed = true
+	if err := tx.QueryRow("SELECT COUNT(*), COALESCE(SUM(rdsize), 0), COALESCE(SUM(rasize), 0) FROM groups").
+		Scan(&sum.Groups, &sum.ReclaimDSize, &sum.ReclaimASize); err != nil {
+		return PruneSummary{}, err
+	}
+	for k, v := range map[string]int64{
+		"groups":       sum.Groups,
+		"reclaimDSize": sum.ReclaimDSize,
+		"reclaimASize": sum.ReclaimASize,
+	} {
+		if _, err := tx.Exec("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", k, strconv.FormatInt(v, 10)); err != nil {
+			return PruneSummary{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return PruneSummary{}, err
+	}
+	return sum, nil
 }

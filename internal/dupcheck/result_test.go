@@ -105,3 +105,80 @@ func TestResultBadBytesRoundTrip(t *testing.T) {
 		t.Fatalf("members %+v", m)
 	}
 }
+
+func TestPruneDeleted(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "dups-1.db")
+	// Group 1: 3 file copies (ids 10, 11, 12) at vol/a/f, vol/b/f, vol/c/f (dsize=100, asize=120, rdsize=200, rasize=240)
+	g1 := OutGroup{
+		Kind: 0, Files: 1, DSize: 100, ASize: 120, RDSize: 200, RASize: 240,
+		Members: []OutMember{
+			{EntryID: 10, ParentID: 2, Path: []byte("vol/a/f")},
+			{EntryID: 11, ParentID: 3, Path: []byte("vol/b/f")},
+			{EntryID: 12, ParentID: 4, Path: []byte("vol/c/f")},
+		},
+	}
+	// Group 2: 2 file copies (ids 20, 21) at vol/dir1/x, vol/dir2/x (dsize=50, asize=60, rdsize=50, rasize=60)
+	g2 := OutGroup{
+		Kind: 0, Files: 1, DSize: 50, ASize: 60, RDSize: 50, RASize: 60,
+		Members: []OutMember{
+			{EntryID: 20, ParentID: 5, Path: []byte("vol/dir1/x")},
+			{EntryID: 21, ParentID: 6, Path: []byte("vol/dir2/x")},
+		},
+	}
+	// Group 3: 2 dir copies (ids 30, 31) at vol/dupdir1, vol/dupdir2 (dsize=40, asize=40, rdsize=40, rasize=40)
+	g3 := OutGroup{
+		Kind: 1, Files: 2, DSize: 40, ASize: 40, RDSize: 40, RASize: 40,
+		Members: []OutMember{
+			{EntryID: 30, ParentID: 1, Path: []byte("vol/dupdir1")},
+			{EntryID: 31, ParentID: 1, Path: []byte("vol/dupdir2")},
+		},
+	}
+	if err := WriteResult(p, []OutGroup{g1, g2, g3}, map[string]string{
+		"groups": "3", "reclaimDSize": "290", "reclaimASize": "340", "finishedAt": "100",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete entry 10 directly, plus delete folder "vol/dir1" (prefix matches vol/dir1/x in g2!).
+	sum, err := PruneDeleted(p, []int64{10}, [][]byte{[]byte("vol/a/f"), []byte("vol/dir1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sum.Changed || sum.Groups != 2 || sum.ReclaimDSize != 140 || sum.ReclaimASize != 160 {
+		t.Fatalf("PruneSummary = %+v, want Changed=true Groups=2 ReclaimDSize=140 ReclaimASize=160", sum)
+	}
+
+	// Reopen read-only and verify updated groups and meta.
+	r, err := OpenResult(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	total, err := r.Total()
+	if err != nil || total != 2 {
+		t.Fatalf("total = %d err=%v", total, err)
+	}
+	gs, err := r.Page("disk", 0, 10, 10)
+	if err != nil || len(gs) != 2 {
+		t.Fatalf("page = %v err=%v", gs, err)
+	}
+	if gs[0].Copies != 2 || len(gs[0].Members) != 2 || gs[0].RDSize != 100 || gs[0].RASize != 120 {
+		t.Fatalf("g1 updated = %+v", gs[0])
+	}
+	if string(gs[0].Members[0].Path) != "vol/b/f" || string(gs[0].Members[1].Path) != "vol/c/f" {
+		t.Fatalf("g1 members = %+v", gs[0].Members)
+	}
+	if gs[1].Copies != 2 || string(gs[1].Members[0].Path) != "vol/dupdir1" {
+		t.Fatalf("g3 = %+v", gs[1])
+	}
+	meta, err := r.Meta()
+	if err != nil || meta["groups"] != "2" || meta["reclaimDSize"] != "140" || meta["reclaimASize"] != "160" {
+		t.Fatalf("meta = %v err=%v", meta, err)
+	}
+
+	// Unmatched delete returns Changed=false.
+	sum2, err := PruneDeleted(p, []int64{999}, [][]byte{[]byte("vol/other")})
+	if err != nil || sum2.Changed {
+		t.Fatalf("no-op prune = %+v err=%v", sum2, err)
+	}
+}

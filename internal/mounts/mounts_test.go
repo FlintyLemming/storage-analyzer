@@ -42,6 +42,7 @@ func TestSelectFixtures(t *testing.T) {
 		"docker-host":         {"/"},
 		"network":             {"/", "/media/usb"},
 		"systemd-strict":      {"/", "/boot/efi"},
+		"systemd-full":        {"/", "/boot/efi", "/mnt/data"},
 		"bind":                {"/", "/data"},
 		"escape":              {"/", "/mnt/my disk"},
 	}
@@ -69,6 +70,18 @@ func TestSelectExclude(t *testing.T) {
 	}
 }
 
+func TestSelectShippedDefaultExcludes(t *testing.T) {
+	c, err := config.Load("../../packaging/linux/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := mps(Select(load(t, "btrfs-nested-subvol"), c.Exclude))
+	want := []string{"/", "/boot/efi", "/mnt/extend"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
 func TestSelectVolumeFields(t *testing.T) {
 	vs := Select(load(t, "ubuntu-ext4"), nil)
 	if len(vs) == 0 {
@@ -88,6 +101,17 @@ func TestParseFields(t *testing.T) {
 	want := Mount{ID: 36, Parent: 25, Dev: "8:2", Root: "/", MountPoint: "/", FSType: "ext4", Source: "/dev/sda2"}
 	if ms[0] != want {
 		t.Errorf("got %+v, want %+v", ms[0], want)
+	}
+}
+
+func TestParseBtrfsSubvol(t *testing.T) {
+	line := "113 31 0:37 /my\\040sub/dir /srv/dir rw,noatime shared:1 - btrfs /dev/md0 rw,compress=zstd:3,subvolid=259,subvol=/my\\040sub\n"
+	ms, err := Parse(strings.NewReader(line))
+	if err != nil || len(ms) != 1 {
+		t.Fatalf("ms=%v err=%v", ms, err)
+	}
+	if ms[0].SubvolID != "259" || ms[0].Subvol != "/my sub" || ms[0].Root != "/my sub/dir" {
+		t.Errorf("got SubvolID=%q Subvol=%q Root=%q", ms[0].SubvolID, ms[0].Subvol, ms[0].Root)
 	}
 }
 

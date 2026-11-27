@@ -18,6 +18,9 @@ import (
 	"time"
 
 	"github.com/FlintyLemming/storage-analyzer/internal/auth"
+	"github.com/FlintyLemming/storage-analyzer/internal/catalog"
+	"github.com/FlintyLemming/storage-analyzer/internal/runner"
+	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
 )
 
 type syncBuffer struct {
@@ -168,7 +171,17 @@ func TestServeEndToEnd(t *testing.T) {
 	}
 	addr := ln.Addr().String()
 	ln.Close()
-	_, cfg := writeConfig(t, addr)
+	root, cfg := writeConfig(t, addr)
+	scanDir := filepath.Join(root, "vol")
+	if err := os.MkdirAll(scanDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString("paths = " + scanDir + "\n")
+	f.Close()
 
 	if out, errOut, code := runChild(t, childArgsEnv+"=passwd --config "+cfg, childStdinEnv+"=correct horse battery\n"); code != 0 {
 		t.Fatalf("passwd exit %d\n%s\n%s", code, out, errOut)
@@ -237,6 +250,10 @@ func TestServeEndToEnd(t *testing.T) {
 	if resp.StatusCode != 401 || !strings.Contains(body, `"auth":"password"`) {
 		t.Fatalf("status without login: %d %s", resp.StatusCode, body)
 	}
+	resp, body = get("/api.cgi?action=volumes")
+	if resp.StatusCode != 401 || !strings.Contains(body, `"auth":"password"`) {
+		t.Fatalf("volumes without login: %d %s", resp.StatusCode, body)
+	}
 	req, _ := http.NewRequest("POST", base+"/api.cgi?action=login", strings.NewReader(`{"password":"correct horse battery"}`))
 	req.Header.Set("X-SA-Request", "1")
 	req.Header.Set("Content-Type", "application/json")
@@ -247,6 +264,10 @@ func TestServeEndToEnd(t *testing.T) {
 	resp, body = get("/api.cgi?action=status")
 	if resp.StatusCode != 200 {
 		t.Fatalf("status after login: %d %s", resp.StatusCode, body)
+	}
+	resp, body = get("/api.cgi?action=volumes")
+	if resp.StatusCode != 200 || !strings.Contains(body, scanDir) {
+		t.Fatalf("volumes after login: %d %s", resp.StatusCode, body)
 	}
 
 	if err := srv.Process.Signal(syscall.SIGTERM); err != nil {
@@ -259,5 +280,69 @@ func TestServeEndToEnd(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatalf("no exit within 5s of SIGTERM\n%s", stderr.String())
+	}
+}
+
+func TestDeleteCommandCLI(t *testing.T) {
+	if childMain(t) {
+		return
+	}
+	root, cfg := writeConfig(t, "")
+	dataDir := filepath.Join(root, "data")
+	volDir := filepath.Join(root, "vol")
+	if err := os.MkdirAll(volDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	targetFile := filepath.Join(volDir, "trash.bin")
+	if err := os.WriteFile(targetFile, []byte("delete-me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString("paths = " + volDir + "\n")
+	f.Close()
+
+	// Run a scan via CLI.
+	if out, errOut, code := runChild(t, childArgsEnv+"=scan --trigger manual --config "+cfg); code != 0 {
+		t.Fatalf("scan exit %d\n%s\n%s", code, out, errOut)
+	}
+	// Resolve entry ID for trash.bin.
+	db, err := scandb.Open(catalog.ScanPath(dataDir, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, _, err := db.Children(1, scandb.ListOpts{Limit: 10})
+	db.Close()
+	if err != nil || len(ch) != 1 || string(ch[0].Name) != "trash.bin" {
+		t.Fatalf("children = %+v err=%v", ch, err)
+	}
+	reqPath, err := runner.WriteDeleteRequest(dataDir, runner.DeleteRequest{JobID: "cli-1", ScanID: 1, EntryIDs: []int64{ch[0].ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Run delete via CLI.
+	if out, errOut, code := runChild(t, childArgsEnv+"=delete --request "+reqPath+" --config "+cfg); code != 0 {
+		t.Fatalf("delete exit %d\n%s\n%s", code, out, errOut)
+	}
+	if _, err := os.Stat(targetFile); !os.IsNotExist(err) {
+		t.Fatalf("trash.bin still exists: %v", err)
+	}
+	if _, err := os.Stat(reqPath); !os.IsNotExist(err) {
+		t.Fatalf("request file was not cleaned up: %v", err)
+	}
+	last, err := runner.LastDelete(dataDir)
+	if err != nil || last == nil || last.ID != "cli-1" || last.Status != "done" {
+		t.Fatalf("LastDelete = %+v err=%v", last, err)
+	}
+
+	// Verify allow_delete = false refuses CLI delete too.
+	f, _ = os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0o600)
+	f.WriteString("allow_delete = false\n")
+	f.Close()
+	reqPath2, _ := runner.WriteDeleteRequest(dataDir, runner.DeleteRequest{JobID: "cli-2", ScanID: 1, EntryIDs: []int64{ch[0].ID}})
+	if _, errOut, code := runChild(t, childArgsEnv+"=delete --request "+reqPath2+" --config "+cfg); code == 0 {
+		t.Fatalf("delete succeeded despite allow_delete = false\n%s", errOut)
 	}
 }

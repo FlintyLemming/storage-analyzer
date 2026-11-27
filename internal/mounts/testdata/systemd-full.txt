@@ -1,0 +1,14 @@
+22 28 0:21 / /proc rw,nosuid,nodev,noexec,relatime shared:12 - proc proc rw
+23 28 0:22 / /sys rw,nosuid,nodev,noexec,relatime shared:2 - sysfs sysfs rw
+24 28 0:5 / /dev rw,nosuid,relatime shared:8 - devtmpfs udev rw,size=4012000k,nr_inodes=1003000,mode=755
+25 24 0:23 / /dev/pts rw,nosuid,noexec,relatime shared:9 - devpts devpts rw,gid=5,mode=620,ptmxmode=000
+26 28 0:24 / /run rw,nosuid,nodev,noexec,relatime shared:5 - tmpfs tmpfs rw,size=806000k,mode=755
+28 1 8:2 / / rw,relatime shared:1 - ext4 /dev/sda2 rw,errors=remount-ro
+29 22 0:25 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime shared:6 - cgroup2 cgroup2 rw,nsdelegate
+36 28 8:1 / /boot/efi ro,relatime shared:40 - vfat /dev/sda1 rw,fmask=0077,dmask=0077,codepage=437,iocharset=iso8859-1,shortname=mixed,errors=remount-ro
+80 28 8:2 /usr /usr ro,relatime shared:1 - ext4 /dev/sda2 rw,errors=remount-ro
+81 28 8:2 /etc /etc ro,relatime shared:1 - ext4 /dev/sda2 rw,errors=remount-ro
+82 28 8:2 /boot /boot ro,relatime shared:1 - ext4 /dev/sda2 rw,errors=remount-ro
+83 28 8:2 /usr/bin /usr/bin ro,relatime shared:1 - ext4 /dev/sda2 rw,errors=remount-ro
+84 28 8:2 /var/lib/storage-analyzer /var/lib/storage-analyzer rw,relatime shared:1 - ext4 /dev/sda2 rw,errors=remount-ro
+85 28 8:17 / /mnt/data rw,relatime shared:42 - ext4 /dev/sdb1 rw

@@ -4,6 +4,8 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -40,6 +42,18 @@ func Handler(o Options) http.Handler {
 		panic("server: index.html lacks " + indexMarker)
 	}
 	index := bytes.Replace(raw, []byte(indexMarker), []byte(indexReplacement), 1)
+	for _, ref := range [][2]string{
+		{"style.css", `href="style.css"`},
+		{"i18n.js", `src="i18n.js"`},
+		{"app.js", `src="app.js"`},
+	} {
+		if b, err := fs.ReadFile(o.Static, ref[0]); err == nil {
+			sum := sha256.Sum256(b)
+			tag := hex.EncodeToString(sum[:4])
+			withHash := ref[1][:len(ref[1])-1] + "?v=" + tag + `"`
+			index = bytes.Replace(index, []byte(ref[1]), []byte(withHash), 1)
+		}
+	}
 
 	h := &handler{o: o, assets: map[string]asset{
 		"/":           {index, "text/html; charset=utf-8"},

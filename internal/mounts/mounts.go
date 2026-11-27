@@ -30,6 +30,7 @@ type Mount struct {
 	FSType     string
 	Source     string
 	SubvolID   string // btrfs subvolid=<N> from super options, empty otherwise
+	Subvol     string // btrfs subvol=<path> from super options, empty otherwise
 }
 
 // LocalTypes are the filesystem types treated as local disks.
@@ -66,12 +67,13 @@ func Parse(r io.Reader) ([]Mount, error) {
 			return nil, fmt.Errorf("mountinfo line %d: bad mount id", n)
 		}
 		fsType := f[sep+1]
-		var subvolID string
+		var subvolID, subvol string
 		if fsType == "btrfs" && len(f) > sep+3 {
 			for _, opt := range strings.Split(f[sep+3], ",") {
 				if id, ok := strings.CutPrefix(opt, "subvolid="); ok && id != "" {
 					subvolID = id
-					break
+				} else if sv, ok := strings.CutPrefix(opt, "subvol="); ok && sv != "" {
+					subvol = volumes.UnescapeMount(sv)
 				}
 			}
 		}
@@ -82,6 +84,7 @@ func Parse(r io.Reader) ([]Mount, error) {
 			FSType:     fsType,
 			Source:     volumes.UnescapeMount(f[sep+2]),
 			SubvolID:   subvolID,
+			Subvol:     subvol,
 		})
 	}
 	if err := sc.Err(); err != nil {

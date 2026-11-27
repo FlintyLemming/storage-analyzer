@@ -2,8 +2,11 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -12,12 +15,15 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf8"
 
 	"github.com/FlintyLemming/storage-analyzer/internal/catalog"
+	"github.com/FlintyLemming/storage-analyzer/internal/deleter"
 	"github.com/FlintyLemming/storage-analyzer/internal/dupcheck"
 	"github.com/FlintyLemming/storage-analyzer/internal/runner"
 	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
+	"github.com/FlintyLemming/storage-analyzer/internal/volumes"
 )
 
 // Config wires the handler to the filesystem and the outside world.
@@ -25,31 +31,39 @@ type Config struct {
 	DataDir       string
 	BinPath       string
 	Auth          Authenticator
+	Discover      func() ([]volumes.Volume, []volumes.Skipped, error)
 	Spawn         func(args ...string) error   // nil: SpawnDetached(BinPath, args...)
 	ApplySchedule func(catalog.Settings) error // called after settings are saved; nil: nothing to do
 	LoginKind     string                       // non-empty: 401 responses carry "auth": LoginKind
+	DeleteEnabled bool
+	DeletePolicy  deleter.Policy
 }
 
 // Item is one entry as returned to the UI.
 type Item struct {
-	ID          int64  `json:"id"`
-	Name        string `json:"name"`
-	BadName     bool   `json:"badName"`
-	Kind        int    `json:"kind"`
-	DSize       int64  `json:"dsize"`
-	ASize       int64  `json:"asize"`
-	Items       int64  `json:"items"`
-	MTime       int64  `json:"mtime"`
-	Flags       int    `json:"flags"`
-	HasChildren bool   `json:"hasChildren"`
+	ID          int64           `json:"id"`
+	Name        string          `json:"name"`
+	BadName     bool            `json:"badName"`
+	Kind        int             `json:"kind"`
+	DSize       int64           `json:"dsize"`
+	ASize       int64           `json:"asize"`
+	Items       int64           `json:"items"`
+	MTime       int64           `json:"mtime"`
+	Flags       int             `json:"flags"`
+	HasChildren bool            `json:"hasChildren"`
+	Docker      json.RawMessage `json:"docker,omitempty"`
 }
 
-func toItem(e scandb.Entry) Item {
-	return Item{
+func toItem(e scandb.Entry, anns map[int64]scandb.Annotation) Item {
+	it := Item{
 		ID: e.ID, Name: strings.ToValidUTF8(string(e.Name), "�"), BadName: e.Flags&scandb.FlagBadName != 0,
 		Kind: e.Kind, DSize: e.DSize, ASize: e.ASize, Items: e.Items, MTime: e.MTime, Flags: e.Flags,
 		HasChildren: e.NChild > 0,
 	}
+	if a, ok := anns[e.ID]; ok && a.Kind == "docker" && json.Valid([]byte(a.Data)) {
+		it.Docker = json.RawMessage(a.Data)
+	}
+	return it
 }
 
 type handler struct{ cfg Config }
@@ -90,7 +104,14 @@ func fail(w http.ResponseWriter, code int, key, msg string) {
 	writeJSON(w, code, map[string]string{"error": key, "message": msg})
 }
 
-var mutating = map[string]bool{"scan_start": true, "scan_cancel": true, "scan_delete": true, "dup_start": true}
+var mutating = map[string]bool{
+	"scan_start":     true,
+	"scan_cancel":    true,
+	"scan_delete":    true,
+	"dup_start":      true,
+	"delete_preview": true,
+	"delete_start":   true,
+}
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	action := r.URL.Query().Get("action")
@@ -128,6 +149,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch action {
 	case "status":
 		h.status(w)
+	case "volumes":
+		h.volumes(w)
 	case "scans":
 		h.scans(w)
 	case "scan_start":
@@ -142,6 +165,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.dupStart(w, r)
 	case "dups":
 		h.dups(w, r)
+	case "delete_preview":
+		h.deletePreview(w, r)
+	case "delete_start":
+		h.deleteStart(w, r)
 	case "settings":
 		h.settings(w, r)
 	default:
@@ -160,11 +187,30 @@ func (h *handler) status(w http.ResponseWriter) {
 		h.internal(w, err)
 		return
 	}
-	if !running {
-		writeJSON(w, 200, map[string]any{"running": false, "progress": nil})
+	resp := map[string]any{"running": running, "progress": nil, "deleteEnabled": h.cfg.DeleteEnabled}
+	if running {
+		resp["progress"] = p
+	}
+	if last, err := runner.LastDelete(h.cfg.DataDir); err == nil && last != nil {
+		resp["lastDelete"] = last
+	}
+	writeJSON(w, 200, resp)
+}
+
+func (h *handler) volumes(w http.ResponseWriter) {
+	if h.cfg.Discover == nil {
+		h.internal(w, errors.New("volume discovery is not configured"))
 		return
 	}
-	writeJSON(w, 200, map[string]any{"running": true, "progress": p})
+	vols, skipped, err := h.cfg.Discover()
+	if err != nil {
+		h.internal(w, err)
+		return
+	}
+	if skipped == nil {
+		skipped = []volumes.Skipped{}
+	}
+	writeJSON(w, 200, map[string]any{"volumes": runner.StatVolumes(vols), "skipped": skipped})
 }
 
 func (h *handler) scans(w http.ResponseWriter) {
@@ -329,15 +375,30 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, err)
 		return
 	}
-	resp := map[string]any{"scan": scan, "dir": toItem(dir), "total": total}
+	ids := make([]int64, 0, len(path)+len(children)+1)
+	if dirID > 0 {
+		ids = append(ids, dirID)
+	}
+	for _, e := range path {
+		ids = append(ids, e.ID)
+	}
+	for _, e := range children {
+		ids = append(ids, e.ID)
+	}
+	anns, err := db.Annotations(ids)
+	if err != nil {
+		h.internal(w, err)
+		return
+	}
+	resp := map[string]any{"scan": scan, "dir": toItem(dir, anns), "total": total}
 	pi := make([]Item, len(path))
 	for i, e := range path {
-		pi[i] = toItem(e)
+		pi[i] = toItem(e, anns)
 	}
 	resp["path"] = pi
 	items := make([]Item, len(children))
 	for i, e := range children {
-		items[i] = toItem(e)
+		items[i] = toItem(e, anns)
 	}
 	resp["items"] = items
 	if dirID == 0 {
@@ -533,4 +594,165 @@ func (h *handler) dups(w http.ResponseWriter, r *http.Request) {
 	}
 	resp["total"], resp["groups"] = total, groups
 	writeJSON(w, 200, resp)
+}
+
+const maxDeleteEntryIDs = 2000
+
+type deleteReqBody struct {
+	ScanID        int64   `json:"scanId"`
+	EntryIDs      []int64 `json:"entryIds"`
+	ConfirmDocker bool    `json:"confirmDocker"`
+}
+
+func (h *handler) parseAndResolveDelete(w http.ResponseWriter, r *http.Request) (deleteReqBody, deleter.ResolveResult, bool) {
+	if !h.cfg.DeleteEnabled {
+		fail(w, 403, "delete_disabled", "file deletion is disabled")
+		return deleteReqBody{}, deleter.ResolveResult{}, false
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+	if err != nil {
+		fail(w, 400, "bad_delete_request", "could not read request body")
+		return deleteReqBody{}, deleter.ResolveResult{}, false
+	}
+	var req deleteReqBody
+	if err := json.Unmarshal(body, &req); err != nil {
+		fail(w, 400, "bad_delete_request", "invalid JSON: "+err.Error())
+		return deleteReqBody{}, deleter.ResolveResult{}, false
+	}
+	if req.ScanID <= 0 || len(req.EntryIDs) == 0 || len(req.EntryIDs) > maxDeleteEntryIDs {
+		fail(w, 400, "bad_delete_request", fmt.Sprintf("scanId and 1..%d entryIds required", maxDeleteEntryIDs))
+		return deleteReqBody{}, deleter.ResolveResult{}, false
+	}
+	c, err := catalog.Open(h.cfg.DataDir)
+	if err != nil {
+		h.internal(w, err)
+		return deleteReqBody{}, deleter.ResolveResult{}, false
+	}
+	defer c.Close()
+
+	list, err := c.List()
+	if err != nil {
+		h.internal(w, err)
+		return deleteReqBody{}, deleter.ResolveResult{}, false
+	}
+	var latestID int64
+	foundTarget := false
+	for _, s := range list {
+		if s.Status != "done" {
+			continue
+		}
+		if latestID == 0 {
+			latestID = s.ID
+		}
+		if s.ID == req.ScanID {
+			foundTarget = true
+		}
+	}
+	if !foundTarget {
+		fail(w, 404, "scan_not_found", "scan not found")
+		return deleteReqBody{}, deleter.ResolveResult{}, false
+	}
+	if req.ScanID != latestID {
+		fail(w, 409, "not_latest_scan", "deletion is only allowed on the latest scan")
+		return deleteReqBody{}, deleter.ResolveResult{}, false
+	}
+
+	scanPath := catalog.ScanPath(h.cfg.DataDir, req.ScanID)
+	if _, err := os.Stat(scanPath); os.IsNotExist(err) {
+		fail(w, 404, "scan_not_found", "scan not found")
+		return deleteReqBody{}, deleter.ResolveResult{}, false
+	}
+	db, err := scandb.Open(scanPath)
+	if err != nil {
+		h.internal(w, err)
+		return deleteReqBody{}, deleter.ResolveResult{}, false
+	}
+	defer db.Close()
+
+	_, roots, err := runner.LoadScanVolumes(db)
+	if err != nil {
+		h.internal(w, err)
+		return deleteReqBody{}, deleter.ResolveResult{}, false
+	}
+	resolved, err := deleter.ResolveTargets(db, roots, h.cfg.DeletePolicy, req.EntryIDs)
+	if err != nil {
+		h.internal(w, err)
+		return deleteReqBody{}, deleter.ResolveResult{}, false
+	}
+	return req, resolved, true
+}
+
+func (h *handler) deletePreview(w http.ResponseWriter, r *http.Request) {
+	req, resolved, ok := h.parseAndResolveDelete(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"scanId":        req.ScanID,
+		"items":         resolved.Targets,
+		"folded":        resolved.Folded,
+		"missing":       resolved.Missing,
+		"totalDSize":    resolved.TotalDSize,
+		"totalASize":    resolved.TotalASize,
+		"totalItems":    resolved.TotalItems,
+		"hasDockerRisk": resolved.HasDockerRisk,
+		"hasProtected":  resolved.HasProtected,
+	})
+}
+
+func newDeleteJobID() string {
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	return fmt.Sprintf("del-%d-%s", time.Now().Unix(), hex.EncodeToString(b[:]))
+}
+
+func (h *handler) deleteStart(w http.ResponseWriter, r *http.Request) {
+	if !h.cfg.DeleteEnabled {
+		fail(w, 403, "delete_disabled", "file deletion is disabled")
+		return
+	}
+	if _, running, err := runner.Running(h.cfg.DataDir); err != nil {
+		h.internal(w, err)
+		return
+	} else if running {
+		fail(w, 409, "task_running", "another task is already running")
+		return
+	}
+	req, resolved, ok := h.parseAndResolveDelete(w, r)
+	if !ok {
+		return
+	}
+	if resolved.HasProtected {
+		fail(w, 403, "protected_path", "one or more selected paths are protected")
+		return
+	}
+	if len(resolved.Targets) == 0 {
+		fail(w, 404, "entry_not_found", "no matching entries found to delete")
+		return
+	}
+	if resolved.HasDockerRisk && !req.ConfirmDocker {
+		fail(w, 400, "docker_confirm_required", "confirmation required to delete Docker directories")
+		return
+	}
+	ids := make([]int64, len(resolved.Targets))
+	for i, t := range resolved.Targets {
+		ids[i] = t.EntryID
+	}
+	jobID := newDeleteJobID()
+	reqPath, err := runner.WriteDeleteRequest(h.cfg.DataDir, runner.DeleteRequest{
+		JobID:         jobID,
+		ScanID:        req.ScanID,
+		EntryIDs:      ids,
+		ConfirmDocker: req.ConfirmDocker,
+	})
+	if err != nil {
+		h.internal(w, err)
+		return
+	}
+	if err := h.cfg.Spawn("delete", "--request", reqPath); err != nil {
+		os.Remove(reqPath)
+		h.internal(w, err)
+		return
+	}
+	writeJSON(w, 202, map[string]any{"started": true, "jobId": jobID, "targets": len(ids)})
 }

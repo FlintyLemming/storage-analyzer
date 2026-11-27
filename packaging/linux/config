@@ -12,4 +12,8 @@ listen = :8099
 # Directories to scan, comma separated. Default: discover mounted filesystems automatically.
 # paths = auto
 # Mount points to leave out in auto-discovery mode (comma separated).
-# exclude = /boot/efi, /mnt/backup
+# Remove or comment out entries you want to scan.
+exclude = /var/lib/containerd, /var/lib/docker, /var/lib/containers, /var/lib/etcd, /var/lib/kubelet
+# Allow deleting files and folders from the web UI (true or false).
+# Set to false for read-only deployments.
+# allow_delete = true

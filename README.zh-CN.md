@@ -17,7 +17,7 @@
 - **定时或手动扫描**：随时手动扫描，也可以每天或每周定时扫描，并可在扫描完成后自动检查重复项。
 - **扫描历史**：保留最近几次成功的扫描结果（默认 10 次），旧结果同样可以完整浏览。
 - **不打扰系统**：扫描和重复检查以最低的 CPU 和 I/O 优先级运行。QNAP 版在两次任务之间没有任何后台进程；Linux 版是常驻服务，空闲时不占 CPU。
-- **只读**：不会修改、移动或删除你的任何文件。
+- **带安全护栏的文件删除**：支持单条直接永久删除，也支持在空间占用视图和重复项视图中跨目录勾选，先加入底部的**待删收集箱**统一核对后再批量删除；内置卷根/挂载点/系统关键目录/历史快照保护，Linux 版还可通过 `allow_delete = false` 关闭删除功能。
 - **中英文界面**：QNAP 版跟随 QTS 的语言设置，Linux 版跟随浏览器语言。
 
 ## QNAP QTS
@@ -91,15 +91,15 @@
 
 4. 用浏览器打开 `http://服务器:8099` 并登录。
 
-服务以专用用户 `storage-analyzer` 运行，只带 `CAP_DAC_READ_SEARCH` 权限，所以能读取所有文件，但不能写入任何文件，并启用了 systemd 沙箱。数据保存在 `/var/lib/storage-analyzer`，配置文件是 `/etc/storage-analyzer/config`，密码哈希在 `/etc/storage-analyzer/password`，日志在 journal 中（`journalctl -u storage-analyzer`）。扫描和重复检查仍然以最低的 CPU 和 I/O 优先级、作为子进程运行。
+服务以非 root 专用用户 `storage-analyzer` 运行，配合 systemd 沙盒（`ProtectSystem=full`，内核层面保持 `/usr`、`/boot`、`/efi`、`/etc` 及系统二进制/库目录只读）和 `CAP_DAC_READ_SEARCH`、`CAP_DAC_OVERRIDE`、`CAP_FOWNER` 能力，从而在不以 root 运行的前提下完成扫描与删除用户数据文件。数据保存在 `/var/lib/storage-analyzer`，配置文件是 `/etc/storage-analyzer/config`，密码哈希在 `/etc/storage-analyzer/password`，日志在 journal 中（`journalctl -u storage-analyzer`）。扫描、重复检查与删除均以最低 CPU 和 I/O 优先级作为子进程运行。
 
 ### 扫描范围
 
-默认根据挂载表自动识别本地磁盘文件系统（ext2/3/4、xfs、btrfs、zfs、f2fs、bcachefs、jfs、reiserfs、ntfs/ntfs3、exfat、vfat、fuseblk）。网络文件系统（NFS、SMB、sshfs 及其他 FUSE）、虚拟和内存文件系统、对已包含文件系统的 bind 挂载，以及 btrfs 的 `.snapshots` 都会跳过。设置 `paths` 则只扫描你列出的目录，列出的网络文件系统也会被扫描。自动模式下，`exclude` 可以排除整个挂载点。
+默认根据挂载表自动识别本地磁盘文件系统（ext2/3/4、xfs、btrfs、zfs、f2fs、bcachefs、jfs、reiserfs、ntfs/ntfs3、exfat、vfat、fuseblk）。网络文件系统（NFS、SMB、sshfs 及其他 FUSE）、虚拟和内存文件系统、对已包含文件系统的 bind 挂载，以及 btrfs 的 `.snapshots` 都会跳过。在 Linux 4.18 及以上内核上，未单独挂载的嵌套 btrfs 子卷会随所属卷一起扫描，btrfs 快照以及已在别处单独挂载的子卷仍会跳过。设置 `paths` 则只扫描你列出的目录，列出的网络文件系统也会被扫描。自动模式下，`exclude` 可以排除整个挂载点。安装包自带的默认配置已排除常见容器与 Kubernetes 运行时挂载点（`/var/lib/containerd`、`/var/lib/docker`、`/var/lib/containers`、`/var/lib/etcd`、`/var/lib/kubelet`）；如需扫描，修改或注释掉 `exclude` 即可。
 
 ### 配置
 
-编辑 `/etc/storage-analyzer/config`，然后用 `sudo systemctl restart storage-analyzer` 重启服务。格式为每行一个 `key = value`；只支持整行的 `#` 注释（值后面不能跟注释），出现未知的键会报错。安装包里附带的文件是带注释的模板。
+编辑 `/etc/storage-analyzer/config`，然后用 `sudo systemctl restart storage-analyzer` 重启服务。格式为每行一个 `key = value`；只支持整行的 `#` 注释（值后面不能跟注释），出现未知的键会报错。安装包里附带的文件包含默认配置和带注释的示例。
 
 | 配置项 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -108,7 +108,8 @@
 | `trusted_proxies` | 未设置 | 以逗号分隔的反向代理 IP 或 CIDR，信任它们发来的 `X-Forwarded-For` 和 `X-Forwarded-Proto` |
 | `data_dir` | `/var/lib/storage-analyzer` | 扫描结果和状态的保存位置 |
 | `paths` | `auto` | `auto`，或以逗号分隔的目录列表，如 `/a, /b` |
-| `exclude` | 未设置 | 自动模式下要排除的挂载点，以逗号分隔，如 `/mnt/x` |
+| `exclude` | 未设置（安装包默认配置为 `/var/lib/containerd, /var/lib/docker, /var/lib/containers, /var/lib/etcd, /var/lib/kubelet`） | 自动模式下要排除的挂载点，以逗号分隔；删除或注释掉该行即不排除 |
+| `allow_delete` | `true` | 是否允许在网页界面删除文件/目录（`true` 或 `false`）；设为 `false` 即切换为纯只读模式 |
 
 ### HTTPS 与反向代理
 
@@ -144,9 +145,9 @@ location / {
 
 同一地址 15 分钟内登录失败 5 次，该地址会被锁定 15 分钟。所有地址合计每分钟最多检查 20 次密码。失败的尝试会记录为 `login failed from <ip>`，可以配合 fail2ban 使用。登录状态（Cookie）有效期 30 天。
 
-### 1024 以下的端口和自定义数据目录
+### 1024 以下的端口、自定义数据目录与更严格的沙盒
 
-服务默认不能绑定 1024 以下的端口。要使用这类端口，或者把 `data_dir` 换到别处，需要添加 systemd override：
+服务默认不能绑定 1024 以下的端口。要使用这类端口、调整 `data_dir`，或者在内核层面进一步收紧写权限，可以添加 systemd override：
 
 ```bash
 sudo systemctl edit storage-analyzer
@@ -156,15 +157,22 @@ sudo systemctl edit storage-analyzer
 
 ```ini
 [Service]
-AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER CAP_NET_BIND_SERVICE
 ```
 
-使用其他 `data_dir`：先让 `storage-analyzer` 用户对该目录有写权限，再放行：
+使用其他 `data_dir`：先让 `storage-analyzer` 用户对该目录有写权限（如果同时启用了 `ProtectSystem=strict`，还需要加上 `ReadWritePaths=/your/data/dir`）。
+
+若希望在内核层强制纯只读（配合配置里的 `allow_delete = false`），或只允许删除特定数据目录下的文件：
 
 ```ini
 [Service]
-ReadWritePaths=/your/data/dir
+ProtectSystem=strict
+# 纯只读时省略 ReadWritePaths；若只想放行特定目录则列在这里：
+# ReadWritePaths=/mnt/data /srv/media
+# 纯只读模式还可以去掉写权限能力：
+# AmbientCapabilities=CAP_DAC_READ_SEARCH
+# CapabilityBoundingSet=CAP_DAC_READ_SEARCH
 ```
 
 然后重启服务。
@@ -177,7 +185,6 @@ ReadWritePaths=/your/data/dir
 
 ### 已知限制
 
-- 没有单独挂载的 btrfs 子卷会被跳过，与 `ncdu -x` 一致。
 - 暂时没有 Docker 镜像。
 - 安装包只支持 systemd，不支持其他 init 系统。
 
@@ -204,7 +211,14 @@ ReadWritePaths=/your/data/dir
 - 扫描后发生变化的文件不参与比较。
 - 校验值会缓存下来。第一次检查要读所有候选文件，可能需要几个小时；之后只读新增或变化过的文件，通常几分钟到几十分钟。
 
-Storage Analyzer 不会删除任何东西，不需要的文件请在 QNAP 上用 File Station 或使用常用工具自行删除。
+### 删除文件
+
+查看**最新一次**已完成的扫描结果时，可以直接单条删除，也可以在空间占用视图的不同目录或**重复项**视图中勾选多个文件/文件夹加入底部的**待删收集箱**，统一核对路径和大小后一次性永久删除。
+
+- 删除为直接永久删除（不进回收站），在后台执行并显示实时进度，可随时停止；完成后自动更新当前扫描的空间统计和重复项列表。
+- 在**重复项**视图中会自动阻止把同一组的最后 1 份副本也勾选或删除（如确需全删请前往空间占用视图）。
+- 历史扫描结果保持只读；卷根目录、挂载点、关键系统目录以及应用自身的数据/配置目录禁止删除；删除 Docker 内部目录需要额外勾选风险确认。
+- Linux 版可在 `/etc/storage-analyzer/config` 中设置 `allow_delete = false` 彻底关闭删除功能。
 
 ### 设置
 

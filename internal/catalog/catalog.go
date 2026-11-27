@@ -425,3 +425,26 @@ func (c *Catalog) GetDupCheck(scanID int64) (DupCheck, error) {
 	}
 	return d, err
 }
+
+// AdjustScanTotals subtracts deleted sizes and entry counts from a finished
+// scan's catalog summary, clamping each field at 0.
+func (c *Catalog) AdjustScanTotals(id, deltaDSize, deltaASize, deletedFiles, deletedDirs int64) error {
+	_, err := c.db.Exec(`UPDATE scans
+		SET total_dsize = MAX(0, total_dsize - ?),
+		    total_asize = MAX(0, total_asize - ?),
+		    files = MAX(0, files - ?),
+		    dirs = MAX(0, dirs - ?)
+		WHERE id = ?`,
+		deltaDSize, deltaASize, deletedFiles, deletedDirs, id)
+	return err
+}
+
+// UpdateDupSummary updates the cached duplicate group count and reclaimable
+// totals for a completed duplicate check after files are deleted.
+func (c *Catalog) UpdateDupSummary(scanID, groups, reclaimDSize, reclaimASize int64) error {
+	_, err := c.db.Exec(`UPDATE dupchecks
+		SET ngroups = ?, reclaim_dsize = ?, reclaim_asize = ?
+		WHERE scan_id = ? AND status = 'done'`,
+		groups, reclaimDSize, reclaimASize, scanID)
+	return err
+}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/FlintyLemming/storage-analyzer/internal/api"
 	"github.com/FlintyLemming/storage-analyzer/internal/catalog"
+	"github.com/FlintyLemming/storage-analyzer/internal/deleter"
 	"github.com/FlintyLemming/storage-analyzer/internal/runner"
 	"github.com/FlintyLemming/storage-analyzer/internal/schedule"
 	"github.com/FlintyLemming/storage-analyzer/internal/volumes"
@@ -23,7 +24,7 @@ import (
 // QNAP QPKG flavor: CGI behind QTS web server, QTS session auth, cron
 // schedule in /etc/config/crontab.
 
-const usage = "cgi|scan|dupcheck|apply-schedule|prune|init-start|init-stop|version"
+const usage = "cgi|scan|dupcheck|delete|apply-schedule|prune|init-start|init-stop|version"
 
 const crontabPath = "/etc/config/crontab"
 
@@ -51,15 +52,26 @@ func newApp(pf *platformFlags) (*app, error) {
 		root = filepath.Dir(filepath.Dir(exe))
 	}
 	root, _ = filepath.Abs(root)
-	return &app{data: filepath.Join(root, "data"), bin: exe, discover: volumes.Discover}, nil
+	dataDir := filepath.Join(root, "data")
+	return &app{
+		data:         dataDir,
+		bin:          exe,
+		discover:     volumes.Discover,
+		allowDelete:  true,
+		deletePolicy: deleter.DefaultPolicy("qnap", dataDir, root),
+	}, nil
 }
 
 func runPlatform(cmd string, a *app, pf *platformFlags) error {
 	switch cmd {
 	case "cgi":
 		return cgi.Serve(api.New(api.Config{
-			DataDir: a.data, BinPath: a.bin,
-			Auth: api.QTSAuth{URL: api.DefaultAuthURL},
+			DataDir:       a.data,
+			BinPath:       a.bin,
+			Auth:          api.QTSAuth{URL: api.DefaultAuthURL},
+			Discover:      a.discover,
+			DeleteEnabled: a.allowDelete,
+			DeletePolicy:  a.deletePolicy,
 			ApplySchedule: func(s catalog.Settings) error {
 				return schedule.Apply(s, a.bin, crontabPath, runCmd)
 			},

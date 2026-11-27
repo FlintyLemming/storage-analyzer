@@ -17,7 +17,7 @@ An ncdu-style disk usage analyzer with a web interface, for QNAP QTS and for ord
 - **Scheduled or on-demand scans.** Run a scan by hand, or daily or weekly at a set time, optionally followed by a duplicate check.
 - **Scan history.** Keeps the most recent successful scans (10 by default), so you can open an older scan and browse it in full.
 - **Stays out of the way.** Scans and duplicate checks run at the lowest CPU and I/O priority. The QNAP version has no background process between them; the Linux version is a resident service that uses no CPU while idle.
-- **Read-only.** It never changes, moves or deletes your files.
+- **Delete files with safety guardrails.** Delete individual files or folders directly, or stage items across multiple folders and the Duplicates view in a **Delete basket** before removing them together. Volume roots, mount points, critical system paths and older scan snapshots are protected; Linux deployments can also disable deletion via `allow_delete = false`.
 - **English and Chinese UI**, following the QTS language on QNAP and the browser language on Linux.
 
 ## QNAP QTS
@@ -91,15 +91,15 @@ Download the package for your system from [Releases](https://github.com/FlintyLe
 
 4. Open `http://SERVER:8099` in a browser and sign in.
 
-The service runs as the dedicated user `storage-analyzer` with only the `CAP_DAC_READ_SEARCH` capability, so it can read every file but can't write any, and systemd sandboxing is on. Data is kept in `/var/lib/storage-analyzer`, the configuration is `/etc/storage-analyzer/config`, the password hash is `/etc/storage-analyzer/password`, and logs go to the journal (`journalctl -u storage-analyzer`). Scans and duplicate checks still run at the lowest CPU and I/O priority, as child processes.
+The service runs as the dedicated non-root user `storage-analyzer` with systemd sandboxing (`ProtectSystem=full`, keeping `/usr`, `/boot`, `/efi`, `/etc`, and system library/binary directories read-only) and `CAP_DAC_READ_SEARCH`, `CAP_DAC_OVERRIDE`, and `CAP_FOWNER` capabilities so it can scan and delete user data files without running as root. Data is kept in `/var/lib/storage-analyzer`, the configuration is `/etc/storage-analyzer/config`, the password hash is `/etc/storage-analyzer/password`, and logs go to the journal (`journalctl -u storage-analyzer`). Scans, duplicate checks, and deletions run at the lowest CPU and I/O priority as child processes.
 
 ### What gets scanned
 
-By default it discovers local disk filesystems from the mount table (ext2/3/4, xfs, btrfs, zfs, f2fs, bcachefs, jfs, reiserfs, ntfs/ntfs3, exfat, vfat, fuseblk). Network filesystems (NFS, SMB, sshfs and other FUSE), virtual and memory filesystems, bind mounts of a filesystem that is already included, and btrfs `.snapshots` are skipped. Set `paths` to scan exactly the directories you list instead; network filesystems are allowed when you list them. In automatic mode, `exclude` drops whole mount points.
+By default it discovers local disk filesystems from the mount table (ext2/3/4, xfs, btrfs, zfs, f2fs, bcachefs, jfs, reiserfs, ntfs/ntfs3, exfat, vfat, fuseblk). Network filesystems (NFS, SMB, sshfs and other FUSE), virtual and memory filesystems, bind mounts of a filesystem that is already included, and btrfs `.snapshots` are skipped. On Linux 4.18+, unmounted nested btrfs subvolumes are scanned as part of their parent volume, while btrfs snapshots and subvolumes separately mounted elsewhere are still skipped. Set `paths` to scan exactly the directories you list instead; network filesystems are allowed when you list them. In automatic mode, `exclude` drops whole mount points. The shipped config excludes common container and Kubernetes runtime mounts (`/var/lib/containerd`, `/var/lib/docker`, `/var/lib/containers`, `/var/lib/etcd`, `/var/lib/kubelet`); edit or comment out `exclude` to scan them.
 
 ### Configuration
 
-Edit `/etc/storage-analyzer/config`, then restart the service with `sudo systemctl restart storage-analyzer`. The format is `key = value`, one per line. Only whole-line `#` comments are allowed (no comments after a value), and unknown keys are errors. The file shipped in the package is a commented template.
+Edit `/etc/storage-analyzer/config`, then restart the service with `sudo systemctl restart storage-analyzer`. The format is `key = value`, one per line. Only whole-line `#` comments are allowed (no comments after a value), and unknown keys are errors. The file shipped in the package comes with default settings and commented examples.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -108,7 +108,8 @@ Edit `/etc/storage-analyzer/config`, then restart the service with `sudo systemc
 | `trusted_proxies` | not set | Comma-separated IPs or CIDRs of reverse proxies whose `X-Forwarded-For` and `X-Forwarded-Proto` headers are trusted |
 | `data_dir` | `/var/lib/storage-analyzer` | Where scan results and state are stored |
 | `paths` | `auto` | `auto`, or a comma-separated list of directories, such as `/a, /b` |
-| `exclude` | not set | Comma-separated mount points to leave out in auto mode, such as `/mnt/x` |
+| `exclude` | not set (shipped config sets `/var/lib/containerd, /var/lib/docker, /var/lib/containers, /var/lib/etcd, /var/lib/kubelet`) | Comma-separated mount points to leave out in auto mode; remove or comment out the line to exclude nothing |
+| `allow_delete` | `true` | Allow deleting files and folders from the web UI (`true` or `false`). Set `false` for read-only deployments. |
 
 ### HTTPS and reverse proxy
 
@@ -144,9 +145,9 @@ location / {
 
 After 5 failed sign-in attempts from one address within 15 minutes, that address is locked out for 15 minutes. Across all addresses, at most 20 password checks are made per minute. Failed attempts are logged as `login failed from <ip>`, which fail2ban can match. A session cookie lasts 30 days.
 
-### Ports below 1024 and a custom data directory
+### Ports below 1024, custom data directory, and stricter sandboxing
 
-The service can't bind ports below 1024 by default. To use one, or to move `data_dir` elsewhere, add a systemd override:
+The service can't bind ports below 1024 by default. To use one, move `data_dir`, or further restrict write access at the kernel level, add a systemd override:
 
 ```bash
 sudo systemctl edit storage-analyzer
@@ -156,15 +157,22 @@ For a port below 1024:
 
 ```ini
 [Service]
-AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER CAP_NET_BIND_SERVICE
 ```
 
-For a different `data_dir`, make the directory writable by the `storage-analyzer` user and allow it:
+For a different `data_dir`, make the directory writable by the `storage-analyzer` user (and add `ReadWritePaths=/your/data/dir` if you also set `ProtectSystem=strict`).
+
+To lock Linux down to strict read-only mode at the kernel level (in addition to `allow_delete = false`), or to restrict deletions to specific data directories only:
 
 ```ini
 [Service]
-ReadWritePaths=/your/data/dir
+ProtectSystem=strict
+# Omit ReadWritePaths for strict read-only, or list only directories allowed for deletion:
+# ReadWritePaths=/mnt/data /srv/media
+# For strict read-only you can also drop write capabilities:
+# AmbientCapabilities=CAP_DAC_READ_SEARCH
+# CapabilityBoundingSet=CAP_DAC_READ_SEARCH
 ```
 
 Then restart the service.
@@ -177,7 +185,6 @@ Then restart the service.
 
 ### Known limitations
 
-- btrfs subvolumes that aren't mounted separately are skipped, like `ncdu -x`.
 - There is no Docker image yet.
 - The packages only support systemd; other init systems aren't supported.
 
@@ -204,7 +211,14 @@ Switch to **Duplicates** and click **Start duplicate check**. Groups of identica
 - Files that changed after the scan are left out of the comparison.
 - Hashes are cached between checks. The first check reads every candidate file and can take a few hours; later checks only read new or changed files and usually take minutes to an hour.
 
-Storage Analyzer doesn't delete anything. Use File Station (on QNAP) or your usual tools to remove what you don't need.
+### Deleting files
+
+When viewing the latest completed scan, you can delete individual items directly or check files and folders across different directories and the **Duplicates** view to collect them in the **Delete basket** at the bottom of the window, then review and permanently delete everything in one batch.
+
+- Deletions are permanent (no recycle bin) and run in the background with live progress and a stop button, updating the scan totals and duplicate list automatically once finished.
+- In **Duplicates**, the UI prevents staging or deleting the last remaining copy of a group (use the Space view if you intentionally want to remove every copy).
+- Historical scans are read-only; volume roots, mount points, critical OS paths, and Storage Analyzer's own data/config directories cannot be deleted; Docker internal directories require an extra risk confirmation.
+- On Linux, set `allow_delete = false` in `/etc/storage-analyzer/config` to disable deletion completely.
 
 ### Settings
 

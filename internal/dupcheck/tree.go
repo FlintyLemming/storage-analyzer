@@ -51,10 +51,16 @@ func IgnoredName(name []byte, isDir bool) bool {
 }
 
 // BuildDirs indexes directories, which must arrive in ascending id order
-// (parents before children).
+// (parents before children). Directories whose parent was skipped (e.g. deleted)
+// are also skipped.
 func BuildDirs(dirs iter.Seq[Node]) map[int64]DirInfo {
 	m := map[int64]DirInfo{}
 	for n := range dirs {
+		if n.Parent != 0 {
+			if _, ok := m[n.Parent]; !ok {
+				continue
+			}
+		}
 		m[n.ID] = DirInfo{
 			Parent:  n.Parent,
 			Name:    n.Name,

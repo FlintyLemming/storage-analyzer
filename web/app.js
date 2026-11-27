@@ -37,6 +37,8 @@
     dir: null,
     volumes: [],
     skipped: [],
+    previewLoaded: false,
+    volSeq: 0,
     sel: -1,
     loading: false,
     running: false,
@@ -47,6 +49,12 @@
     view: 'space', // space | dups
     dup: { groups: [], total: 0, check: null, result: null, open: new Set(), loaded: false },
     dupSeq: 0,
+    deleteEnabled: false,
+    basket: new Map(), // entryId -> { entryId, path, kind, dsize, asize, items, name }
+    activeDeleteJobId: null,
+    activeDeleteTargets: [],
+    seenDeleteJobId: null,
+    statusLoaded: false,
   };
   const DUP_PAGE = 100;
   const PHASES = new Set(['prepare', 'quick', 'full', 'rollup', 'write']);
@@ -112,7 +120,8 @@
   // errorText shows a known API error code in the UI language; the server's
   // own message is the fallback and fills {detail} where one is expected.
   const ERROR_CODES = new Set(['not_logged_in', 'not_admin', 'auth_unavailable', 'task_running', 'not_running',
-    'scan_running', 'scan_not_found', 'no_scans', 'dir_not_found', 'invalid_settings', 'internal', 'bad_password']);
+    'scan_running', 'scan_not_found', 'no_scans', 'dir_not_found', 'invalid_settings', 'internal', 'bad_password',
+    'delete_disabled', 'not_latest_scan', 'protected_path', 'docker_confirm_required', 'entry_not_found', 'bad_delete_request']);
   function errorText(data) {
     if (!data) return undefined;
     if (data.error === 'too_many_attempts') return t('err.too_many_attempts', { min: Math.max(1, Math.ceil((data.retryAfter || 60) / 60)) });
@@ -143,6 +152,8 @@
     const cls = isRoot ? 'ico-mount' : key === 'dir' ? 'ico-dir' : key === 'link' ? 'ico-link' : key === 'mount' ? 'ico-mount' : 'ico-file';
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
     svg.setAttribute('class', cls);
     svg.setAttribute('aria-hidden', 'true');
     const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -170,6 +181,150 @@
     renderScanSelect();
   }
   const doneScans = () => state.scans.filter((s) => s.status === 'done');
+  const latestDoneScanId = () => {
+    const done = doneScans();
+    return done.length ? done[0].id : null;
+  };
+  const canDelete = () => state.deleteEnabled && state.scanId !== null && state.scanId === latestDoneScanId();
+
+  // ---------- delete basket ----------
+  function joinDisplayPath(base, seg) {
+    if (!base) return seg;
+    return base.endsWith('/') ? base + seg : base + '/' + seg;
+  }
+  function currentRootId() {
+    return state.path.length ? state.path[0].id : null;
+  }
+  function currentDirDisplayPath() {
+    let p = '';
+    for (const seg of state.path) p = joinDisplayPath(p, seg.name);
+    return p;
+  }
+  function currentDisplayPath(name) {
+    return joinDisplayPath(currentDirDisplayPath(), name);
+  }
+  function isPathUnder(child, parent) {
+    if (!parent || !child || child.length <= parent.length) return false;
+    const pfx = parent.endsWith('/') ? parent : parent + '/';
+    return child.startsWith(pfx);
+  }
+  function inferRootId(displayPath) {
+    if (!displayPath || !state.volumes.length) return null;
+    let best = null;
+    let bestLen = -1;
+    for (const v of state.volumes) {
+      if (!v.name) continue;
+      if (displayPath === v.name || isPathUnder(displayPath, v.name)) {
+        if (v.name.length > bestLen) {
+          best = v.entryId;
+          bestLen = v.name.length;
+        }
+      }
+    }
+    return best;
+  }
+  function basketRootId(b) {
+    if (b.rootId !== null && b.rootId !== undefined) return b.rootId;
+    const id = inferRootId(b.path);
+    if (id !== null) b.rootId = id;
+    return id;
+  }
+  function sameVolume(b, rootId) {
+    if (rootId === null || rootId === undefined) return true;
+    const br = basketRootId(b);
+    if (br === null || br === undefined) return true;
+    return br === rootId;
+  }
+  function basketCovers(entryId, displayPath, rootId = null) {
+    if (state.basket.has(entryId)) return 'direct';
+    for (const b of state.basket.values()) {
+      if (b.kind === KIND.DIR && sameVolume(b, rootId) && isPathUnder(displayPath, b.path)) return 'inherited';
+    }
+    return null;
+  }
+  function basketDescendantStats(displayPath, rootId = null) {
+    let count = 0;
+    let dsize = 0;
+    let asize = 0;
+    for (const b of state.basket.values()) {
+      if (!sameVolume(b, rootId)) continue;
+      if (isPathUnder(b.path, displayPath)) {
+        count++;
+        if (!b.hardlinkDup) {
+          dsize += b.dsize || 0;
+          asize += b.asize || 0;
+        }
+      }
+    }
+    return { count, dsize, asize, size: state.sizeMode === 'apparent' ? asize : dsize };
+  }
+  function basketTotalNonHardlink() {
+    let dsize = 0;
+    let asize = 0;
+    for (const b of state.basket.values()) {
+      if (!b.hardlinkDup) {
+        dsize += b.dsize || 0;
+        asize += b.asize || 0;
+      }
+    }
+    return { dsize, asize, size: state.sizeMode === 'apparent' ? asize : dsize };
+  }
+  function addToBasket(entry) {
+    const rId = entry.rootId !== undefined && entry.rootId !== null ? entry.rootId : inferRootId(entry.path);
+    entry.rootId = rId;
+    if (basketCovers(entry.entryId, entry.path, rId)) return;
+    let folded = 0;
+    if (entry.kind === KIND.DIR) {
+      for (const [id, b] of Array.from(state.basket.entries())) {
+        if (sameVolume(b, rId) && isPathUnder(b.path, entry.path)) {
+          state.basket.delete(id);
+          folded++;
+        }
+      }
+    }
+    state.basket.set(entry.entryId, entry);
+    if (folded > 0) toast(t('basket.folded', { n: folded }));
+    renderBasketBar();
+  }
+  function removeFromBasket(entryId) {
+    state.basket.delete(entryId);
+    renderBasketBar();
+  }
+  function renderSpaceBasketSync() {
+    if (state.scanId === null || !state.dir) return;
+    renderCrumbs();
+    renderVolumes();
+    renderHead();
+    renderRows();
+  }
+  function clearBasket() {
+    state.basket.clear();
+    renderBasketBar();
+    if (state.view === 'dups') renderDupRows();
+    else renderSpaceBasketSync();
+  }
+  function renderBasketBar() {
+    const bar = $('basketBar');
+    if (!bar) return;
+    if (!canDelete() || state.basket.size === 0) {
+      bar.classList.add('hidden');
+      bar.replaceChildren();
+      return;
+    }
+    let totalSize = 0;
+    for (const b of state.basket.values()) totalSize += sizeOf(b);
+    const busy = state.running;
+    bar.replaceChildren(
+      el('div', { class: 'basket-info', text: t('basket.summary', { n: state.basket.size, size: fmtSize(totalSize) }) }),
+      el('div', { class: 'basket-actions' },
+        el('button', { class: 'btn small', type: 'button', text: t('basket.clear'), disabled: busy, onclick: clearBasket }),
+        el('button', {
+          class: 'btn small danger-primary', type: 'button', text: t('basket.review'), disabled: busy,
+          title: busy ? t('delFile.busyTitle') : '',
+          onclick: () => openDeleteConfirm(Array.from(state.basket.keys()), { fromBasket: true }),
+        })));
+    bar.classList.remove('hidden');
+  }
 
   function renderScanSelect() {
     const sel = $('scanSelect');
@@ -202,6 +357,8 @@
       state.path = data.path || [];
       state.items = data.items || [];
       state.total = data.total || 0;
+      state.volSeq++;
+      state.previewLoaded = false;
       if (dirId === 0) { state.volumes = data.volumes || []; state.skipped = data.skipped || []; }
       if (!keepSel || prevDir !== dirId) state.sel = -1;
       if (selectId !== null) state.sel = state.items.findIndex((i) => i.id === selectId);
@@ -220,7 +377,7 @@
           renderScanSelect();
           return showCurrent();
         }
-        if (!latest) { state.scanId = null; return renderEmpty(); }
+        if (!latest) { state.scanId = null; return renderEmpty({ reloadVolumes: true }); }
       }
       showError(e);
     } finally {
@@ -237,6 +394,7 @@
         offset: state.items.length, limit: PAGE,
       });
       state.items = state.items.concat(data.items || []);
+      renderHead();
       renderRows();
     } catch (e) {
       showError(e);
@@ -252,46 +410,257 @@
   }
 
   // ---------- rendering ----------
+  const DK_TYPES = new Set(['image_layer', 'container_rw', 'container_init', 'container', 'build_cache', 'volume_anon', 'volume_named', 'internal', 'orphan']);
+  const DK_STATUSES = new Set(['running', 'exited', 'created', 'paused', 'restarting', 'dead']);
+  const DK_CACHES = new Set(['exec.cachemount', 'source.local', 'source.git.checkout', 'frontend', 'regular']);
+  const DK_NOTES = new Set(['l', 'backingFsBlockDev', 'metadata.db', 'missing_config']);
+  const DK_WARNS = new Set(['images', 'containers', 'buildkit', 'volumes']);
+
+  const isDockerEntry = (dk) => !!dk && DK_TYPES.has(dk.type);
+  const dkStatusText = (s) => (DK_STATUSES.has(s) ? t('dk.status.' + s) : s || '');
+  const dkCacheText = (c) => (DK_CACHES.has(c) ? t('dk.cache.' + c) : c || '');
+  const dkNoteText = (n) => (DK_NOTES.has(n) ? t('dk.note.' + n) : n || '');
+
+  function dkTagClass(type) {
+    if (type === 'container' || type === 'container_rw' || type === 'container_init') return 'tag dk dk-container';
+    if (type === 'image_layer') return 'tag dk dk-image';
+    if (type === 'build_cache') return 'tag dk dk-build';
+    if (type === 'volume_anon' || type === 'volume_named') return 'tag dk dk-volume';
+    if (type === 'orphan') return 'tag dk dk-orphan';
+    return 'tag dk dk-internal';
+  }
+
+  function dkPrimaryText(dk, rawName) {
+    switch (dk.type) {
+      case 'image_layer':
+        if (dk.count > 1 && dk.label) return t('dk.moreImages', { name: dk.label, n: dk.count });
+        return dk.label || '';
+      case 'container':
+      case 'container_rw':
+      case 'container_init': {
+        const st = dk.status ? dkStatusText(dk.status) : '';
+        return st ? `${dk.label || ''} · ${st}` : (dk.label || '');
+      }
+      case 'build_cache': {
+        const sub = dk.cacheType && dk.cacheType !== 'regular' ? dkCacheText(dk.cacheType) : '';
+        if (sub && dk.label) return `${sub} · ${dk.label}`;
+        return dk.label || sub || '';
+      }
+      case 'volume_anon':
+        if (dk.mounts && dk.mounts.length > 1) return t('dk.moreMounts', { name: dk.mounts[0].container, n: dk.mounts.length });
+        if (dk.mounts && dk.mounts.length === 1) return `${dk.mounts[0].container} → ${dk.mounts[0].destination}`;
+        if (dk.unmounted) return t('dk.unmounted');
+        return '';
+      case 'volume_named': {
+        let extra = '';
+        if (dk.mounts && dk.mounts.length > 1) extra = t('dk.moreMounts', { name: dk.mounts[0].container, n: dk.mounts.length });
+        else if (dk.mounts && dk.mounts.length === 1) extra = `${dk.mounts[0].container} → ${dk.mounts[0].destination}`;
+        else if (dk.unmounted) extra = t('dk.unmounted');
+        return extra ? `${rawName} · ${extra}` : rawName;
+      }
+      case 'internal':
+        return dk.note ? dkNoteText(dk.note) : '';
+      default:
+        return '';
+    }
+  }
+
+  function dkCrumbText(p) {
+    const dk = p.docker;
+    if (!isDockerEntry(dk) || dk.type === 'volume_named' || !dk.label) return p.name;
+    const shortRaw = p.name.length > 12 ? p.name.slice(0, 12) + '…' : p.name;
+    return `${dk.label} (${shortRaw})`;
+  }
+
+  function renderDirNotice() {
+    const box = $('dirNotice');
+    if (!box) return;
+    const ws = state.dir && state.dir.docker && Array.isArray(state.dir.docker.warnings) ? state.dir.docker.warnings : [];
+    if (!ws.length || state.view !== 'space') {
+      box.classList.add('hidden');
+      box.textContent = '';
+      return;
+    }
+    const parts = ws.map((w) => (DK_WARNS.has(w) ? t('dk.warn.' + w) : w)).join(t('skip.sep'));
+    box.textContent = t('dk.warn.banner', { parts });
+    box.classList.remove('hidden');
+  }
+
+  async function copyText(str) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(str);
+        toast(t('dk.dlg.copied'));
+        return;
+      }
+    } catch { /* fallback below */ }
+    const ta = el('textarea', { style: 'position:fixed;opacity:0', text: str });
+    document.body.append(ta);
+    ta.select();
+    try { document.execCommand('copy'); toast(t('dk.dlg.copied')); } catch { /* ignore */ }
+    ta.remove();
+  }
+
+  function showDockerDetail(it) {
+    const dk = it.docker;
+    if (!dk) return;
+    const dl = el('dl', { class: 'dk-dl' });
+    const row = (label, ...val) => dl.append(el('dt', { text: label }), el('dd', {}, ...val));
+
+    row(t('dk.dlg.type'), el('span', { class: dkTagClass(dk.type), text: t('dk.type.' + dk.type) }));
+    row(t('dk.dlg.rawName'), el('div', { class: 'dk-raw-row' },
+      el('code', { class: 'dk-inline-code', text: it.name }),
+      el('button', { class: 'btn small', type: 'button', text: t('dk.dlg.copy'), onclick: () => copyText(it.name) })));
+
+    if (dk.container) {
+      const c = dk.container;
+      row(t('dk.dlg.container'), `${c.name} (${c.id})`);
+      if (c.image) row(t('dk.dlg.containerImg'), el('code', { class: 'dk-inline-code', text: c.image }));
+      if (c.status) row(t('dk.dlg.status'), dkStatusText(c.status));
+    }
+    const comp = dk.compose || (dk.container && dk.container.compose);
+    if (comp && (comp.project || comp.service || comp.volume)) {
+      const parts = [comp.project, comp.service || comp.volume].filter(Boolean);
+      row(t('dk.dlg.compose'), el('code', { class: 'dk-inline-code', text: parts.join(' / ') }));
+    }
+    if (dk.images && dk.images.length) {
+      const ul = el('ul', { class: 'dk-list' });
+      for (const img of dk.images) {
+        const badges = [];
+        if (img.id) badges.push(el('code', { class: 'dk-inline-code', text: img.id }));
+        if (img.inUse) badges.push(el('span', { class: 'tag dk dk-container', text: t('dk.inUse') }));
+        if (img.dangling) badges.push(el('span', { class: 'tag dk dk-orphan', text: t('dk.dangling') }));
+        ul.append(el('li', {}, el('span', { text: img.name }), badges));
+      }
+      const total = dk.count || dk.images.length;
+      const extra = total > dk.images.length
+        ? el('div', { class: 'muted', style: 'margin-top:6px;font-size:12px', text: t('dk.dlg.imagesTrunc', { shown: dk.images.length, total }) })
+        : '';
+      row(t('dk.dlg.images', { n: total }), ul, extra);
+    }
+    if (dk.createdBy) row(t('dk.dlg.createdBy'), el('pre', { class: 'dk-code', text: dk.createdBy }));
+    if (dk.cacheType) row(t('dk.dlg.cacheType'), dkCacheText(dk.cacheType) + (DK_CACHES.has(dk.cacheType) ? ` (${dk.cacheType})` : ''));
+    if (dk.buildDesc) row(t('dk.dlg.buildDesc'), el('pre', { class: 'dk-code', text: dk.buildDesc }));
+    if (dk.driver) row(t('dk.dlg.driver'), dk.driver);
+    if (dk.mounts && dk.mounts.length) {
+      const ul = el('ul', { class: 'dk-list' });
+      for (const m of dk.mounts) {
+        const badges = [el('span', { class: 'tag', text: t(m.rw ? 'dk.rw' : 'dk.ro') })];
+        if (m.status) badges.push(el('span', { class: 'tag', text: dkStatusText(m.status) }));
+        ul.append(el('li', {}, el('span', { text: m.container }), ' → ', el('code', { class: 'dk-inline-code', text: m.destination }), badges));
+      }
+      row(t('dk.dlg.mounts'), ul);
+    } else if (dk.unmounted) {
+      row(t('dk.dlg.mounts'), el('span', { class: 'muted', text: t('dk.unmounted') }));
+    }
+    if (dk.labels && Object.keys(dk.labels).length) {
+      const ul = el('ul', { class: 'dk-list' });
+      for (const [k, v] of Object.entries(dk.labels).sort()) {
+        ul.append(el('li', {}, el('code', { class: 'dk-inline-code', text: v ? `${k}=${v}` : k })));
+      }
+      row(t('dk.dlg.labels'), ul);
+    }
+    if (dk.note) row(t('dk.dlg.note'), dkNoteText(dk.note));
+    if (dk.type === 'orphan') row(t('dk.dlg.note'), el('p', { class: 'dk-note', text: t('dk.dlg.orphanNote') }));
+
+    openDialog(t('dk.dlg.title'), dl, [el('button', { class: 'btn', type: 'button', text: t('dlg.close'), onclick: closeDialog })]);
+  }
+
   function render() {
     $('state').classList.add('hidden');
     $('list').classList.remove('hidden');
     renderCrumbs();
     renderVolumes();
+    renderDirNotice();
     renderHead();
     renderRows();
+    renderBasketBar();
   }
 
   function renderCrumbs() {
     const ol = $('crumbs');
     ol.replaceChildren(el('li', {}, el('a', { text: t('crumbs.all'), onclick: () => openDir(0) })));
-    for (const p of state.path) ol.append(el('li', {}, el('a', { text: p.name, title: p.name, onclick: () => openDir(p.id) })));
+    for (const p of state.path) {
+      const label = dkCrumbText(p);
+      const title = isDockerEntry(p.docker) && p.docker.label ? `${p.docker.label} — ${p.name}` : p.name;
+      ol.append(el('li', {}, el('a', { text: label, title, onclick: () => openDir(p.id) })));
+    }
     const d = state.dir;
-    $('dirSummary').textContent = d ? t('crumbs.summary', { size: fmtSize(sizeOf(d)), n: d.items || 0 }) : '';
+    const sumEl = $('dirSummary');
+    if (!d) { sumEl.textContent = ''; return; }
+    const totalSize = sizeOf(d);
+    let dirStaged = 0;
+    if (canDelete() && state.basket.size > 0) {
+      if (state.dirId === 0) {
+        dirStaged = Math.min(totalSize, basketTotalNonHardlink().size);
+      } else {
+        const curPath = currentDirDisplayPath();
+        const curRoot = currentRootId();
+        if (basketCovers(state.dirId, curPath, curRoot)) dirStaged = totalSize;
+        else dirStaged = Math.min(totalSize, basketDescendantStats(curPath, curRoot).size);
+      }
+    }
+    const baseText = t('crumbs.summary', { size: fmtSize(totalSize), n: d.items || 0 });
+    if (dirStaged > 0) {
+      sumEl.replaceChildren(
+        baseText,
+        ' · ',
+        el('span', {
+          class: 'summary-del',
+          text: t('crumbs.staged', { size: fmtSize(dirStaged) }),
+          title: t('crumbs.staged.title', { remain: fmtSize(Math.max(0, totalSize - dirStaged)) }),
+        }));
+    } else {
+      sumEl.textContent = baseText;
+    }
   }
 
   function renderVolumes() {
     const box = $('volumes');
-    if (state.dirId !== 0 || !state.volumes.length) { box.classList.add('hidden'); return; }
+    const preview = state.scanId === null;
+    if ((!preview && state.dirId !== 0) || (!state.volumes.length && !state.skipped.length)) {
+      box.classList.add('hidden');
+      return;
+    }
     box.replaceChildren();
-    const byId = new Map(state.items.map((i) => [i.id, i]));
+    const byId = preview ? null : new Map(state.items.map((i) => [i.id, i]));
     for (const v of state.volumes) {
-      const item = byId.get(v.entryId);
-      const scanned = item ? item.dsize : 0;
       const total = v.fsTotal || 0;
       const used = v.fsUsed || 0;
-      const unacc = Math.max(0, used - scanned);
       const pct = (x) => (total ? Math.min(100, (x / total) * 100) : 0) + '%';
+      const subtitle = v.fsType
+        ? t('vol.fsDev', { fstype: v.fsType, device: v.device || '' })
+        : v.pool ? t('vol.poolMount', { pool: String(v.pool), mount: v.mountPoint }) : v.mountPoint;
+      let bar, legend;
+      if (preview) {
+        bar = el('div', { class: 'cap', title: t('vol.bar.previewTitle') },
+          el('span', { class: 's', style: `width:${pct(used)}` }));
+        legend = el('div', { class: 'legend' },
+          el('span', {}, el('i', { style: 'background:var(--bar)' }), t('vol.used', { size: fmtSize(used) })),
+          el('span', {}, el('i', { style: 'background:var(--free)' }), t('vol.free', { size: fmtSize(v.fsFree) })));
+      } else {
+        const item = byId.get(v.entryId);
+        const scanned = item ? item.dsize : 0;
+        const unacc = Math.max(0, used - scanned);
+        const scannedCap = Math.min(scanned, used || scanned);
+        const desc = canDelete() && state.basket.size > 0 ? basketDescendantStats(v.name, v.entryId) : null;
+        const stagedCap = desc ? Math.min(scannedCap, desc.dsize) : 0;
+        const keepCap = Math.max(0, scannedCap - stagedCap);
+        bar = el('div', { class: 'cap', title: t(stagedCap > 0 ? 'vol.bar.stagedTitle' : 'vol.bar.title') },
+          keepCap > 0 || stagedCap === 0 ? el('span', { class: 's', style: `width:${pct(keepCap)}` }) : false,
+          stagedCap > 0 ? el('span', { class: 'd', style: `width:${pct(stagedCap)}` }) : false,
+          el('span', { class: 'u', style: `width:${pct(unacc)}` }));
+        legend = el('div', { class: 'legend' },
+          el('span', {}, el('i', { style: 'background:var(--bar)' }), t('vol.scanned', { size: fmtSize(scanned) })),
+          stagedCap > 0 ? el('span', { class: 'vol-del' }, el('i', { style: 'background:var(--bar-del)' }), t('vol.staged', { size: fmtSize(stagedCap) })) : false,
+          el('span', { title: t('vol.unacc.title') }, el('i', { style: 'background:var(--unaccounted)' }), t('vol.unacc', { size: fmtSize(unacc) })),
+          el('span', {}, el('i', { style: 'background:var(--free)' }), t('vol.free', { size: fmtSize(v.fsFree) })));
+      }
       box.append(el('div', { class: 'vol' },
         el('div', { class: 'vol-head' },
-          el('div', { class: 'vol-name' }, v.name, el('small', { text: v.fsType ? t('vol.fsDev', { fstype: v.fsType, device: v.device || '' }) : v.pool ? t('vol.poolMount', { pool: String(v.pool), mount: v.mountPoint }) : v.mountPoint })),
+          el('div', { class: 'vol-name' }, v.name, el('small', { text: subtitle })),
           el('div', { class: 'vol-cap', text: total ? t('vol.cap', { used: fmtSize(used), total: fmtSize(total), pct: ((used / total) * 100).toFixed(1) }) : '' })),
-        el('div', { class: 'cap', title: t('vol.bar.title') },
-          el('span', { class: 's', style: `width:${pct(Math.min(scanned, used || scanned))}` }),
-          el('span', { class: 'u', style: `width:${pct(unacc)}` })),
-        el('div', { class: 'legend' },
-          el('span', {}, el('i', { style: 'background:var(--bar)' }), t('vol.scanned', { size: fmtSize(scanned) })),
-          el('span', { title: t('vol.unacc.title') }, el('i', { style: 'background:var(--unaccounted)' }), t('vol.unacc', { size: fmtSize(unacc) })),
-          el('span', {}, el('i', { style: 'background:var(--free)' }), t('vol.free', { size: fmtSize(v.fsFree) })))));
+        bar, legend));
     }
     if (state.skipped.length) {
       const why = (reason) => (SKIP_REASONS.has(reason) ? t('skip.' + reason) : reason);
@@ -307,6 +676,51 @@
       th.classList.toggle('sorted', on);
       th.classList.toggle('asc', on && state.order === 'asc');
     }
+    const nameTh = document.querySelector('#list th.c-name');
+    if (!nameTh) return;
+    const oldChk = nameTh.querySelector('input.th-chk');
+    if (oldChk) oldChk.remove();
+    if (!canDelete() || state.dirId === 0) return;
+    const deletable = state.items.filter((it) => it.kind !== KIND.MOUNT);
+    if (!deletable.length) return;
+    const curRoot = currentRootId();
+    let covered = 0;
+    let directOnly = 0;
+    let partial = 0;
+    for (const it of deletable) {
+      const p = currentDisplayPath(it.name);
+      const cov = basketCovers(it.id, p, curRoot);
+      if (cov) covered++;
+      if (cov === 'direct') directOnly++;
+      else if (!cov && it.kind === KIND.DIR && state.basket.size > 0 && basketDescendantStats(p, curRoot).count > 0) partial++;
+    }
+    const allCovered = covered === deletable.length;
+    const allInherited = allCovered && directOnly === 0;
+    const chk = el('input', {
+      type: 'checkbox', class: 'th-chk', title: t('basket.selectAll'), 'aria-label': t('basket.selectAll'),
+      checked: allCovered, disabled: allInherited || state.running,
+      onclick: (ev) => ev.stopPropagation(),
+      onchange: (ev) => {
+        ev.stopPropagation();
+        if (chk.checked) {
+          for (const it of deletable) {
+            const p = currentDisplayPath(it.name);
+            if (!basketCovers(it.id, p, curRoot)) {
+              addToBasket({
+                entryId: it.id, path: p, kind: it.kind, dsize: it.dsize, asize: it.asize,
+                items: it.items, name: it.name, rootId: curRoot, hardlinkDup: !!(it.flags & FLAG.HARDLINK_DUP),
+              });
+            }
+          }
+        } else {
+          for (const it of deletable) state.basket.delete(it.id);
+          renderBasketBar();
+        }
+        renderSpaceBasketSync();
+      },
+    });
+    chk.indeterminate = (covered > 0 || partial > 0) && !allCovered;
+    nameTh.prepend(chk);
   }
 
   function rowFor(it, idx, parentSize) {
@@ -314,18 +728,132 @@
     const size = sizeOf(it);
     const pctVal = parentSize > 0 ? (size / parentSize) * 100 : 0;
     const enterable = (it.kind === KIND.DIR) && it.hasChildren;
+    const allowDel = canDelete() && !isRoot && it.kind !== KIND.MOUNT;
+    const rowRootId = isRoot ? it.id : currentRootId();
+    const dispPath = isRoot ? it.name : currentDisplayPath(it.name);
+    const cov = allowDel ? basketCovers(it.id, dispPath, rowRootId) : null;
+    const desc = (canDelete() && !cov && it.kind === KIND.DIR && state.basket.size > 0)
+      ? basketDescendantStats(dispPath, rowRootId) : null;
+    const isPartial = !!(desc && desc.count > 0);
+    const stagedSize = it.kind === KIND.MOUNT ? 0 : cov ? size : (desc ? Math.min(size, desc.size) : 0);
     const tags = [];
     if (it.kind === KIND.MOUNT) tags.push(el('span', { class: 'tag', text: t('tag.mount') }));
     if (it.kind === KIND.SYMLINK) tags.push(el('span', { class: 'tag', text: t('tag.symlink') }));
     if (it.flags & FLAG.HARDLINK_DUP) tags.push(el('span', { class: 'tag', text: t('tag.hardlink'), title: t('tag.hardlink.title') }));
     if (it.flags & FLAG.ERROR) tags.push(el('span', { class: 'tag warn', text: t('tag.readError') }));
     if (it.badName) tags.push(el('span', { class: 'tag warn', text: t('tag.badName'), title: t('tag.badName.title') }));
-    const tr = el('tr', { class: [enterable ? 'dir' : '', idx === state.sel ? 'sel' : ''].join(' ').trim(), 'data-idx': idx },
-      el('td', { class: 'c-name' }, el('div', { class: 'name', title: it.name }, icon(it.kind, isRoot), el('span', { class: 't', text: it.name }), tags)),
-      el('td', { class: 'c-size', text: it.kind === KIND.MOUNT ? '—' : fmtSize(size) }),
-      el('td', { class: 'c-pct' }, el('div', { class: 'pct' },
-        el('div', { class: 'track' }, el('div', { class: 'fill' + (it.kind === KIND.DIR ? '' : ' file'), style: `width:${Math.min(100, pctVal).toFixed(2)}%` })),
-        el('span', { class: 'num', text: it.kind === KIND.MOUNT ? '' : pctVal.toFixed(1) + '%' }))),
+    if (cov === 'inherited') tags.push(el('span', { class: 'tag inherited', text: t('basket.inherited'), title: t('basket.inherited.title') }));
+    const dk = isDockerEntry(it.docker) ? it.docker : null;
+    const nameKids = [];
+    if (allowDel) {
+      const chk = el('input', {
+        type: 'checkbox', class: 'row-chk', checked: !!cov,
+        disabled: cov === 'inherited' || state.running,
+        title: cov === 'inherited'
+          ? t('basket.inherited.title')
+          : isPartial
+            ? t('basket.partial.title', { n: desc.count, size: fmtSize(stagedSize) })
+            : t('basket.selectRow'),
+        'aria-label': t('basket.selectRow'),
+        'aria-checked': isPartial ? 'mixed' : undefined,
+        onclick: (ev) => ev.stopPropagation(),
+        onchange: (ev) => {
+          ev.stopPropagation();
+          if (ev.target.checked) {
+            addToBasket({
+              entryId: it.id, path: dispPath, kind: it.kind, dsize: it.dsize, asize: it.asize,
+              items: it.items, name: it.name, rootId: rowRootId, hardlinkDup: !!(it.flags & FLAG.HARDLINK_DUP),
+            });
+          } else {
+            removeFromBasket(it.id);
+          }
+          renderSpaceBasketSync();
+        },
+      });
+      chk.indeterminate = isPartial;
+      nameKids.push(chk);
+    }
+    nameKids.push(icon(it.kind, isRoot));
+    let nameTitle = it.name;
+    const actions = [];
+    if (dk) {
+      const primary = dkPrimaryText(dk, it.name);
+      if (primary) nameTitle = `${primary} — ${it.name}`;
+      nameKids.push(el('span', { class: dkTagClass(dk.type), text: t('dk.type.' + dk.type) }));
+      if (primary) nameKids.push(el('span', { class: 'dk-label', text: primary }));
+      if (dk.type !== 'volume_named') {
+        nameKids.push(el('span', { class: primary ? 'dk-raw' : 't', text: it.name }));
+      }
+      nameKids.push(...tags);
+      if (dk.type !== 'internal') {
+        actions.push(el('button', {
+          class: 'dk-info', type: 'button', text: t('dk.detailBtn'), title: t('dk.detailBtn.title'),
+          onclick: (ev) => { ev.stopPropagation(); showDockerDetail(it); },
+        }));
+      }
+    } else {
+      nameKids.push(el('span', { class: 't', text: it.name }), ...tags);
+    }
+    if (allowDel) {
+      actions.push(el('button', {
+        class: 'row-del', type: 'button', text: t('row.delete'),
+        title: state.running ? t('delFile.busyTitle') : t('row.delete.title'),
+        disabled: state.running,
+        onclick: (ev) => { ev.stopPropagation(); openDeleteConfirm([it.id], { fromBasket: false }); },
+      }));
+    }
+    if (actions.length) nameKids.push(el('span', { class: 'row-actions' }, actions));
+
+    const keepSize = Math.max(0, size - stagedSize);
+    let sizeCell;
+    if (it.kind === KIND.MOUNT) {
+      sizeCell = el('td', { class: 'c-size', text: '—' });
+    } else if (cov) {
+      sizeCell = el('td', { class: 'c-size', title: t('basket.size.staged', { size: fmtSize(size) }) },
+        el('span', { class: 'size-staged', text: fmtSize(size) }));
+    } else if (stagedSize > 0) {
+      sizeCell = el('td', {
+        class: 'c-size',
+        title: t('basket.size.partial', { total: fmtSize(size), staged: fmtSize(stagedSize), remain: fmtSize(keepSize) }),
+      }, el('div', { class: 'size-cell' },
+        el('span', { text: fmtSize(size) }),
+        el('span', { class: 'size-del', text: '-' + fmtSize(stagedSize) })));
+    } else {
+      sizeCell = el('td', { class: 'c-size', text: fmtSize(size) });
+    }
+
+    const cappedPct = Math.min(100, pctVal);
+    const keepPct = parentSize > 0 ? Math.min(cappedPct, (keepSize / parentSize) * 100) : 0;
+    const delPct = Math.max(0, cappedPct - keepPct);
+    const fillBase = 'fill' + (it.kind === KIND.DIR ? '' : ' file');
+    const trackKids = [];
+    if (it.kind !== KIND.MOUNT) {
+      if (cov) {
+        if (cappedPct > 0) trackKids.push(el('div', { class: fillBase + ' del', style: `width:${cappedPct.toFixed(2)}%` }));
+      } else if (stagedSize > 0) {
+        if (keepPct > 0) trackKids.push(el('div', { class: fillBase, style: `width:${keepPct.toFixed(2)}%` }));
+        if (cappedPct > 0) trackKids.push(el('div', { class: fillBase + ' del', style: `width:${delPct.toFixed(2)}%` }));
+      } else {
+        trackKids.push(el('div', { class: fillBase, style: `width:${cappedPct.toFixed(2)}%` }));
+      }
+    }
+    const pctTitle = it.kind === KIND.MOUNT
+      ? undefined
+      : cov
+        ? t('basket.pct.staged', { pct: pctVal.toFixed(1), size: fmtSize(size) })
+        : stagedSize > 0
+          ? t('basket.pct.partial', { pct: pctVal.toFixed(1), delPct: delPct.toFixed(1), staged: fmtSize(stagedSize), keepPct: keepPct.toFixed(1), remain: fmtSize(keepSize) })
+          : undefined;
+
+    const tr = el('tr', {
+      class: [enterable ? 'dir' : '', idx === state.sel ? 'sel' : '', cov ? 'staged' : isPartial ? 'partial' : ''].join(' ').trim(),
+      'data-idx': idx,
+    },
+      el('td', { class: 'c-name' }, el('div', { class: 'name', title: nameTitle }, nameKids)),
+      sizeCell,
+      el('td', { class: 'c-pct' }, el('div', { class: 'pct', title: pctTitle },
+        el('div', { class: 'track' }, trackKids),
+        el('span', { class: 'num' + (cov && it.kind !== KIND.MOUNT ? ' staged' : ''), text: it.kind === KIND.MOUNT ? '' : pctVal.toFixed(1) + '%' }))),
       el('td', { class: 'c-items', text: it.kind === KIND.DIR ? fmtNum(it.items) : '' }),
       el('td', { class: 'c-mtime', text: fmtTime(it.mtime) }));
     tr.addEventListener('click', () => { state.sel = idx; highlight(); if (enterable) openDir(it.id); });
@@ -361,25 +889,70 @@
     if (cur) cur.scrollIntoView({ block: 'nearest' });
   }
 
-  function showState(title, text, button) {
+  function showState(title, text, button, { keepVolumes = false } = {}) {
     $('list').classList.add('hidden');
     $('moreWrap').classList.add('hidden');
-    $('volumes').classList.add('hidden');
-    $('crumbs').replaceChildren();
-    $('dirSummary').textContent = '';
+    $('dirNotice').classList.add('hidden');
+    if (!keepVolumes) {
+      state.volSeq++;
+      state.previewLoaded = false;
+      $('volumes').classList.add('hidden');
+      $('crumbs').replaceChildren();
+      $('dirSummary').textContent = '';
+    }
     const s = $('state');
     s.replaceChildren(el('h3', { text: title }), el('p', { text }), button || '');
     s.classList.remove('hidden');
   }
 
-  function renderEmpty() {
-    if (state.view !== 'space') setView('space', { load: false });
-    if (state.running) {
-      showState(t('empty.running.h'), t('empty.running.p'));
-      return;
+  function renderPreviewHeader() {
+    const ol = $('crumbs');
+    ol.replaceChildren(el('li', {}, el('a', { text: t('crumbs.all') })));
+    $('dirSummary').textContent = state.volumes.length
+      ? t('vol.previewSummary', { n: state.volumes.length })
+      : t('vol.previewEmpty');
+  }
+
+  async function loadPreviewVolumes() {
+    const seq = ++state.volSeq;
+    try {
+      const data = await api('volumes');
+      if (seq !== state.volSeq || state.scanId !== null || state.view !== 'space') return;
+      state.volumes = data.volumes || [];
+      state.skipped = data.skipped || [];
+      state.previewLoaded = true;
+      renderPreviewHeader();
+      renderVolumes();
+    } catch (e) {
+      if (seq !== state.volSeq) return;
+      if (e.status === 401 || e.status === 403) return showError(e);
+      toast(e.message || t('opFailed'));
     }
-    showState(t('empty.h'), t('empty.p'),
-      el('button', { class: 'btn primary', type: 'button', text: t('empty.start'), onclick: startScan }));
+  }
+
+  function renderEmpty({ reloadVolumes = false } = {}) {
+    if (state.view !== 'space') setView('space', { load: false });
+    if (reloadVolumes || !state.previewLoaded) {
+      state.volumes = [];
+      state.skipped = [];
+      state.previewLoaded = false;
+    }
+    if (state.running) {
+      showState(t('empty.running.h'), t('empty.running.p'), null, { keepVolumes: true });
+    } else {
+      showState(t('empty.h'), t('empty.p'),
+        el('button', { class: 'btn primary', type: 'button', text: t('empty.start'), onclick: startScan }),
+        { keepVolumes: true });
+    }
+    if (state.previewLoaded) {
+      renderPreviewHeader();
+      renderVolumes();
+    } else {
+      $('volumes').classList.add('hidden');
+      $('crumbs').replaceChildren();
+      $('dirSummary').textContent = '';
+      loadPreviewVolumes();
+    }
   }
 
   const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -387,9 +960,12 @@
   // Linux build: password sign-in form in the main content area.
   function showLogin() {
     clearTimeout(state.pollTimer);
+    state.volSeq++;
+    state.previewLoaded = false;
     closeDialog();
     if ($('loginPassword')) return;
-    for (const id of ['progress', 'dupBar', 'dupWrap', 'volumes']) $(id).classList.add('hidden');
+    for (const id of ['progress', 'dupBar', 'dupWrap', 'volumes', 'dirNotice', 'basketBar']) $(id).classList.add('hidden');
+    state.basket.clear();
     document.querySelector('.toolbar').classList.add('hidden');
     $('crumbs').replaceChildren();
     $('dirSummary').textContent = '';
@@ -450,15 +1026,18 @@
   }
 
   async function cancelScan() {
+    const del = isDeleteJob(state.progress);
     const dup = isDupJob(state.progress);
-    const ok = dup
-      ? await confirmDialog(t('dup.cancel.h'), t('dup.cancel.p'), t('dup.cancel.ok'), true)
-      : await confirmDialog(t('scan.cancel.h'), t('scan.cancel.p'), t('scan.cancel.ok'), true);
+    const ok = del
+      ? await confirmDialog(t('delFile.cancel.h'), t('delFile.cancel.p'), t('delFile.cancel.ok'), true)
+      : dup
+        ? await confirmDialog(t('dup.cancel.h'), t('dup.cancel.p'), t('dup.cancel.ok'), true)
+        : await confirmDialog(t('scan.cancel.h'), t('scan.cancel.p'), t('scan.cancel.ok'), true);
     if (!ok) return;
     try {
       await api('scan_cancel', {}, { method: 'POST' });
-      toast(t(dup ? 'dup.canceling' : 'scan.canceling'));
-      schedulePoll(800);
+      toast(t(del ? 'delFile.canceling' : dup ? 'dup.canceling' : 'scan.canceling'));
+      schedulePoll(500);
     } catch (e) {
       if (e.code === 'not_running') { schedulePoll(0); return; }
       showError(e);
@@ -479,24 +1058,57 @@
       schedulePoll(5000);
       return;
     }
+    const prevDelEnabled = state.deleteEnabled;
+    state.deleteEnabled = !!st.deleteEnabled;
     const was = state.running;
     const prev = state.progress;
     state.running = !!st.running;
     state.progress = st.progress;
+    if (!state.statusLoaded) {
+      state.statusLoaded = true;
+      if (state.running && isDeleteJob(state.progress) && state.progress.jobId) {
+        state.activeDeleteJobId = state.progress.jobId;
+      } else if (!state.running && st.lastDelete && st.lastDelete.id && !state.activeDeleteJobId) {
+        state.seenDeleteJobId = st.lastDelete.id;
+      }
+    } else if (state.running && isDeleteJob(state.progress) && state.progress.jobId) {
+      state.activeDeleteJobId = state.progress.jobId;
+    }
     renderProgress();
-    if (state.view === 'dups' && state.dup.loaded && was !== state.running) renderDups();
+    renderBasketBar();
+    if (was !== state.running || prevDelEnabled !== state.deleteEnabled) {
+      if (state.view === 'dups' && state.dup.loaded) renderDups();
+      else renderSpaceBasketSync();
+    }
     // A scheduled run goes straight from its scan into a duplicate check
     // without ever going idle: treat the switch as the scan finishing.
-    if (was && state.running && prev && !isDupJob(prev) && isDupJob(state.progress)) await onScanFinished(prev);
+    if (was && state.running && prev && !isDupJob(prev) && !isDeleteJob(prev) && isDupJob(state.progress)) await onScanFinished(prev);
     if (state.running) {
-      schedulePoll(2000);
-    } else if (was) {
-      if (isDupJob(prev)) await onDupFinished(prev.scanId);
-      else await onScanFinished(prev);
+      schedulePoll(isDeleteJob(state.progress) ? 800 : 2000);
+    } else {
+      const ld = st.lastDelete;
+      const newDelDone = ld && ld.id && ld.id !== state.seenDeleteJobId &&
+        (state.activeDeleteJobId === ld.id || (was && isDeleteJob(prev)));
+      if (newDelDone) {
+        state.seenDeleteJobId = ld.id;
+        state.activeDeleteJobId = null;
+        await onDeleteFinished(ld);
+      } else if (was) {
+        if (isDeleteJob(prev)) {
+          state.activeDeleteJobId = null;
+          await loadScans().catch(() => {});
+          showCurrent();
+        } else if (isDupJob(prev)) {
+          await onDupFinished(prev.scanId);
+        } else {
+          await onScanFinished(prev);
+        }
+      }
     }
   }
 
   const isDupJob = (p) => !!p && p.job === 'dupcheck';
+  const isDeleteJob = (p) => !!p && p.job === 'delete';
 
   async function onDupFinished(scanId) {
     await loadScans().catch(() => {});
@@ -519,9 +1131,11 @@
     const last = state.scans.find((s) => s.id === (prevProgress && prevProgress.scanId)) || fresh || state.scans[0];
     if (last && last.status === 'done') {
       toast(t('scan.done', { size: fmtSize(last.totalDSize), files: last.files || 0, dur: fmtDuration(last.durationS) }));
+      state.basket.clear();
       state.scanId = last.id;
       state.dirId = 0;
       renderScanSelect();
+      renderBasketBar();
       showCurrent();
     } else if (last && last.status === 'canceled') {
       toast(t('scan.canceled'));
@@ -542,7 +1156,8 @@
     const p = state.progress || {};
     const elapsed = p.startedAt ? Date.now() / 1000 - p.startedAt : 0;
     const bar = $('progBar');
-    $('btnCancel').textContent = t(isDupJob(p) ? 'dup.cancel.ok' : 'scan.cancel.ok');
+    $('btnCancel').textContent = t(isDeleteJob(p) ? 'delFile.cancel.ok' : isDupJob(p) ? 'dup.cancel.ok' : 'scan.cancel.ok');
+    if (isDeleteJob(p)) return renderDeleteProgress(p, elapsed, bar);
     if (isDupJob(p)) return renderDupProgress(p, elapsed, bar);
     if (p.prevFiles > 0) {
       const pct = Math.min(99, (p.files / p.prevFiles) * 100);
@@ -559,6 +1174,244 @@
     $('progStats').textContent = stats.join(' · ');
     $('progPath').textContent = p.current || '';
     $('progPath').title = p.current || '';
+  }
+
+  function renderDeleteProgress(p, elapsed, bar) {
+    const targets = p.targets || 0;
+    const done = p.doneTargets || 0;
+    if (targets > 1) {
+      const pct = Math.min(99, (done / targets) * 100);
+      bar.classList.remove('indeterminate');
+      bar.style.width = pct.toFixed(1) + '%';
+      $('progTitle').textContent = t('delFile.progTitleCount', { done, total: targets });
+    } else {
+      bar.classList.add('indeterminate');
+      $('progTitle').textContent = t('delFile.progTitle');
+    }
+    const stats = [
+      t('delFile.progStats', { items: p.deletedItems || 0, size: fmtSize(p.freedBytes || 0) }),
+      t('elapsed', { dur: fmtDuration(elapsed) }),
+    ];
+    if (p.failed) stats.push(t('delFile.progFailed', { n: p.failed }));
+    $('progStats').textContent = stats.join(' · ');
+    $('progPath').textContent = p.current || '';
+    $('progPath').title = p.current || '';
+  }
+
+  // ---------- file deletion dialogs & completion ----------
+  const PROTECT_REASONS = new Set(['volume_root', 'mount_point', 'system_path', 'app_data', 'bad_path']);
+  const protectReasonText = (r) => (PROTECT_REASONS.has(r) ? t('delFile.reason.' + r) : r || '');
+
+  async function openDeleteConfirm(entryIds, { fromBasket = false } = {}) {
+    if (!canDelete() || state.running) return;
+    if (!entryIds || !entryIds.length) return;
+    const title = t(fromBasket ? 'delFile.basketTitle' : 'delFile.title');
+    openDialog(title, el('p', { class: 'muted', text: t('delFile.loading') }),
+      [el('button', { class: 'btn', type: 'button', text: t('cancel'), onclick: closeDialog })]);
+
+    let data;
+    try {
+      data = await api('delete_preview', {}, { method: 'POST', body: { scanId: state.scanId, entryIds } });
+    } catch (e) {
+      closeDialog();
+      showError(e);
+      return;
+    }
+
+    const items = data.items || [];
+    if (fromBasket) {
+      // Drop any entry IDs that disappeared from the scan since they were staged.
+      const keepSet = new Set(items.map((x) => x.entryId));
+      let dropped = false;
+      for (const id of Array.from(state.basket.keys())) {
+        if (!keepSet.has(id) && entryIds.includes(id)) { state.basket.delete(id); dropped = true; }
+      }
+      renderBasketBar();
+      if (dropped) {
+        if (state.view === 'dups') renderDupRows(); else renderSpaceBasketSync();
+      }
+    }
+
+    if (!items.length) {
+      openDialog(title, el('p', { class: 'del-summary', text: t('delFile.empty') }),
+        [el('button', { class: 'btn', type: 'button', text: t('dlg.close'), onclick: closeDialog })], true);
+      if (state.view === 'dups') renderDupRows(); else renderSpaceBasketSync();
+      return;
+    }
+
+    const bodyKids = [];
+    const totalSize = state.sizeMode === 'apparent' ? data.totalASize : data.totalDSize;
+    const deletableCount = items.filter((x) => !x.protected).length;
+    bodyKids.push(el('p', {
+      class: 'del-summary',
+      text: t('delFile.summary', { n: deletableCount || items.length, items: data.totalItems || 0, size: fmtSize(totalSize) }),
+    }));
+    const notes = [];
+    if (data.folded > 0) notes.push(t('delFile.foldedNote', { n: data.folded }));
+    if (data.missing > 0) notes.push(t('delFile.missingNote', { n: data.missing }));
+    if (notes.length) bodyKids.push(el('p', { class: 'del-meta', text: notes.join(' ') }));
+
+    if (data.hasProtected) {
+      const protKids = [el('span', { text: t('delFile.protectedBanner') })];
+      if (fromBasket) {
+        protKids.push(el('button', {
+          class: 'btn small', type: 'button', text: t('delFile.removeProtected'),
+          onclick: () => {
+            for (const it of items) if (it.protected) state.basket.delete(it.entryId);
+            renderBasketBar();
+            if (state.view === 'dups') renderDupRows(); else renderSpaceBasketSync();
+            if (state.basket.size === 0) closeDialog();
+            else openDeleteConfirm(Array.from(state.basket.keys()), { fromBasket: true });
+          },
+        }));
+      }
+      bodyKids.push(el('div', { class: 'del-warn protected' }, el('div', { class: 'del-warn-head' }, protKids)));
+    }
+
+    const listEl = el('ul', { class: 'del-list' });
+    for (const it of items) {
+      const subKids = [el('span', { text: fmtSize(state.sizeMode === 'apparent' ? it.asize : it.dsize) })];
+      if (it.kind === KIND.DIR) subKids.push(el('span', { text: '· ' + t('delFile.itemCount', { n: it.items }) }));
+      if (it.badName) subKids.push(el('span', { class: 'tag warn', text: t('tag.badName') }));
+      if (it.dockerRisk) {
+        const dkLbl = DK_TYPES.has(it.dockerType) ? t('dk.type.' + it.dockerType) : t('delFile.dockerTag');
+        subKids.push(el('span', { class: 'tag docker-risk', text: dkLbl }));
+      }
+      if (it.protected) {
+        subKids.push(el('span', { class: 'tag protected', text: protectReasonText(it.protectReason) }));
+      }
+      const rowKids = [
+        icon(it.kind, false),
+        el('div', { class: 'del-item-main' },
+          el('div', { class: 'del-item-path' }, el('bdi', { dir: 'ltr', text: it.path })),
+          el('div', { class: 'del-item-sub' }, subKids)),
+      ];
+      if (fromBasket) {
+        rowKids.push(el('button', {
+          class: 'btn small', type: 'button', text: t('delFile.remove'),
+          onclick: () => {
+            state.basket.delete(it.entryId);
+            renderBasketBar();
+            if (state.view === 'dups') renderDupRows(); else renderSpaceBasketSync();
+            if (state.basket.size === 0) closeDialog();
+            else openDeleteConfirm(Array.from(state.basket.keys()), { fromBasket: true });
+          },
+        }));
+      }
+      listEl.append(el('li', { class: 'del-item' + (it.protected ? ' is-protected' : '') }, rowKids));
+    }
+    bodyKids.push(listEl);
+
+    let dockerAck = null;
+    if (data.hasDockerRisk) {
+      dockerAck = el('input', { type: 'checkbox' });
+      bodyKids.push(el('div', { class: 'del-warn docker' },
+        el('div', { text: t('delFile.dockerWarn') }),
+        el('label', { class: 'del-ack' }, dockerAck, el('span', { text: t('delFile.dockerAck') }))));
+    }
+
+    const confirmBtn = el('button', {
+      class: 'btn danger-primary', type: 'button',
+      text: items.length > 1 ? t('delFile.confirmCount', { n: items.length }) : t('delFile.confirm'),
+    });
+    const syncConfirm = () => {
+      confirmBtn.disabled = state.running || data.hasProtected || (data.hasDockerRisk && (!dockerAck || !dockerAck.checked));
+    };
+    syncConfirm();
+    if (dockerAck) dockerAck.addEventListener('change', syncConfirm);
+
+    confirmBtn.addEventListener('click', async () => {
+      confirmBtn.disabled = true;
+      try {
+        const resp = await api('delete_start', {}, {
+          method: 'POST',
+          body: {
+            scanId: state.scanId,
+            entryIds: items.map((x) => x.entryId),
+            confirmDocker: !!(dockerAck && dockerAck.checked),
+          },
+        });
+        closeDialog();
+        toast(t('delFile.started'));
+        state.activeDeleteJobId = resp.jobId;
+        state.activeDeleteTargets = items.map((x) => ({ entryId: x.entryId, displayPath: x.displayPath, kind: x.kind }));
+        state.running = true;
+        state.progress = {
+          job: 'delete', jobId: resp.jobId, scanId: state.scanId,
+          targets: resp.targets || items.length, doneTargets: 0, deletedItems: 0, freedBytes: 0,
+          startedAt: Date.now() / 1000,
+        };
+        renderProgress();
+        renderBasketBar();
+        if (state.view === 'dups') renderDups(); else renderSpaceBasketSync();
+        schedulePoll(250);
+      } catch (e) {
+        if (e.code === 'task_running') { closeDialog(); toast(t('err.task_running')); schedulePoll(0); return; }
+        syncConfirm();
+        showError(e);
+      }
+    });
+
+    openDialog(title, el('div', {}, bodyKids), [
+      el('button', { class: 'btn', type: 'button', text: t('cancel'), onclick: closeDialog }),
+      confirmBtn,
+    ]);
+  }
+
+  async function onDeleteFinished(ld) {
+    if (Array.isArray(ld.deletedIds)) {
+      const delSet = new Set(ld.deletedIds);
+      for (const id of delSet) state.basket.delete(id);
+      for (const dt of state.activeDeleteTargets || []) {
+        if (dt.kind === KIND.DIR && delSet.has(dt.entryId) && dt.displayPath) {
+          for (const [bid, b] of Array.from(state.basket.entries())) {
+            if (isPathUnder(b.path, dt.displayPath)) state.basket.delete(bid);
+          }
+        }
+      }
+    }
+    state.activeDeleteTargets = [];
+    await loadScans().catch(() => {});
+    renderBasketBar();
+    await showCurrent();
+    const freed = fmtSize(state.sizeMode === 'apparent' ? ld.freedASize : ld.freedDSize);
+    const hasFailures = Array.isArray(ld.failures) && ld.failures.length > 0;
+    if (ld.status === 'done' && !hasFailures) {
+      toast(t('delFile.done', { items: ld.deletedItems || 0, size: freed }));
+    } else if (ld.status === 'canceled' && !hasFailures) {
+      toast(t('delFile.canceled', { items: ld.deletedItems || 0, size: freed }));
+    } else {
+      showDeleteResultModal(ld, freed);
+    }
+  }
+
+  function showDeleteResultModal(ld, freed) {
+    const isFailed = ld.status === 'failed' && (!ld.failures || !ld.failures.length);
+    const title = t(isFailed ? 'delFile.failedTitle' : 'delFile.partialTitle');
+    const kids = [];
+    if (isFailed) {
+      kids.push(el('p', { class: 'del-summary', text: t('delFile.failedSummary', { msg: ld.errorMessage || t('unknownError') }) }));
+    } else {
+      const failCount = (ld.failures && ld.failures.length) || Math.max(0, (ld.targets || 0) - (ld.succeeded || 0));
+      kids.push(el('p', {
+        class: 'del-summary',
+        text: t('delFile.partialSummary', {
+          succeeded: ld.succeeded || 0, targets: ld.targets || 0, items: ld.deletedItems || 0, size: freed, failed: failCount,
+        }),
+      }));
+      if (ld.failures && ld.failures.length) {
+        const ul = el('ul', { class: 'del-list' });
+        for (const f of ld.failures) {
+          ul.append(el('li', { class: 'del-item' },
+            el('div', { class: 'del-item-main' },
+              el('div', { class: 'del-item-path' }, el('bdi', { dir: 'ltr', text: f.path || '' })),
+              el('div', { class: 'del-fail-err', text: f.error || '' }))));
+        }
+        kids.push(ul);
+      }
+      kids.push(el('p', { class: 'del-meta', text: t('delFile.rescanHint') }));
+    }
+    openDialog(title, el('div', {}, kids), [el('button', { class: 'btn primary', type: 'button', text: t('dlg.close'), onclick: closeDialog })]);
   }
 
   // ---------- dialogs ----------
@@ -617,7 +1470,7 @@
         state.scanId = latest ? latest.id : null;
         renderScanSelect();
         state.dirId = 0;
-        if (latest) showCurrent(); else renderEmpty();
+        if (latest) showCurrent(); else renderEmpty({ reloadVolumes: true });
       }
       showHistory();
     } catch (e) {
@@ -698,7 +1551,7 @@
     const dups = view === 'dups';
     $('listWrap').classList.toggle('hidden', dups);
     document.querySelector('.crumbs-row').classList.toggle('hidden', dups);
-    if (dups) $('volumes').classList.add('hidden');
+    if (dups) { $('volumes').classList.add('hidden'); $('dirNotice').classList.add('hidden'); }
     $('dupBar').classList.toggle('hidden', !dups);
     $('dupWrap').classList.toggle('hidden', !dups);
     if (!load) return;
@@ -727,7 +1580,7 @@
         const latest = doneScans()[0];
         if (latest) { state.scanId = latest.id; state.dirId = 0; renderScanSelect(); return loadDups(); }
         state.scanId = null;
-        return renderEmpty();
+        return renderEmpty({ reloadVolumes: true });
       }
       showError(e);
     }
@@ -768,6 +1621,7 @@
   function renderDups() {
     renderDupBar();
     renderDupRows();
+    renderBasketBar();
   }
 
   function renderDupBar() {
@@ -802,18 +1656,68 @@
     bar.classList.toggle('hidden', !parts.length || state.view !== 'dups');
   }
 
+  function dupGroupStagedCount(g) {
+    let n = 0;
+    for (const m of g.members) {
+      if (basketCovers(m.entryId, m.path, inferRootId(m.path))) n++;
+    }
+    return n;
+  }
+
   function dupMemberRows(g) {
     const rows = [];
     if (g.kind === KIND.DIR) rows.push(el('tr', { class: 'member-note' }, el('td', { colspan: 4, text: t('dup.dirNote', { n: g.files || 0 }) })));
+    const allowDel = canDelete();
+    const stagedCount = allowDel ? dupGroupStagedCount(g) : 0;
     for (const m of g.members) {
+      const mRoot = inferRootId(m.path);
+      const cov = allowDel ? basketCovers(m.entryId, m.path, mRoot) : null;
+      const wouldEmpty = allowDel && !cov && (stagedCount + 1 >= g.copies);
       const tags = [];
       if (m.covered) tags.push(el('span', { class: 'tag', text: t('dup.covered'), title: t('dup.covered.title') }));
       if (m.badName) tags.push(el('span', { class: 'tag warn', text: t('tag.badName'), title: t('tag.badName.title') }));
-      rows.push(el('tr', { class: 'member' }, el('td', { colspan: 4 },
-        el('div', { class: 'mpath' },
-          el('span', { class: 't', title: m.path }, el('bdi', { dir: 'ltr', text: m.path })),
-          tags,
-          el('button', { class: 'btn small jump', type: 'button', text: t('dup.jump'), title: t('dup.jump.title'), onclick: (ev) => { ev.stopPropagation(); jumpTo(m); } })))));
+      if (cov === 'inherited') tags.push(el('span', { class: 'tag inherited', text: t('basket.inherited'), title: t('basket.inherited.title') }));
+      const mKids = [];
+      if (allowDel) {
+        mKids.push(el('input', {
+          type: 'checkbox', class: 'row-chk', checked: !!cov,
+          disabled: cov === 'inherited' || wouldEmpty || state.running,
+          title: cov === 'inherited' ? t('basket.inherited.title') : wouldEmpty ? t('basket.lastCopy') : t('basket.selectRow'),
+          'aria-label': t('basket.selectRow'),
+          onclick: (ev) => ev.stopPropagation(),
+          onchange: (ev) => {
+            ev.stopPropagation();
+            if (ev.target.checked) {
+              addToBasket({
+                entryId: m.entryId, path: m.path, kind: g.kind,
+                dsize: g.dsize, asize: g.asize, items: g.files || 1, name: g.name,
+                rootId: mRoot, hardlinkDup: false,
+              });
+            } else {
+              removeFromBasket(m.entryId);
+            }
+            renderDupRows();
+          },
+        }));
+      }
+      const actBtns = [];
+      if (allowDel) {
+        actBtns.push(el('button', {
+          class: 'btn small danger', type: 'button', text: t('row.delete'),
+          disabled: state.running || wouldEmpty,
+          title: state.running ? t('delFile.busyTitle') : wouldEmpty ? t('basket.lastCopy') : t('row.delete.title'),
+          onclick: (ev) => { ev.stopPropagation(); openDeleteConfirm([m.entryId], { fromBasket: false }); },
+        }));
+      }
+      actBtns.push(el('button', {
+        class: 'btn small jump', type: 'button', text: t('dup.jump'), title: t('dup.jump.title'),
+        onclick: (ev) => { ev.stopPropagation(); jumpTo(m); },
+      }));
+      mKids.push(
+        el('span', { class: 't', title: m.path }, el('bdi', { dir: 'ltr', text: m.path })),
+        tags,
+        el('span', { class: 'mpath-actions' }, actBtns));
+      rows.push(el('tr', { class: 'member' + (cov ? ' staged' : '') }, el('td', { colspan: 4 }, el('div', { class: 'mpath' }, mKids))));
     }
     if (g.copies > g.members.length) {
       rows.push(el('tr', { class: 'member-note' }, el('td', { colspan: 4, text: t('dup.moreCopies', { n: g.copies - g.members.length }) })));
@@ -922,6 +1826,7 @@
     state.scanId = id;
     state.dirId = 0;
     renderScanSelect();
+    renderBasketBar();
     showCurrent();
   }
 
@@ -938,6 +1843,7 @@
       b.classList.toggle('on', on);
       b.setAttribute('aria-checked', on);
     }
+    renderBasketBar();
   }
 
   function bind() {

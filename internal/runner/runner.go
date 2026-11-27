@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/FlintyLemming/storage-analyzer/internal/catalog"
+	"github.com/FlintyLemming/storage-analyzer/internal/docker"
 	"github.com/FlintyLemming/storage-analyzer/internal/dupcheck"
 	"github.com/FlintyLemming/storage-analyzer/internal/scandb"
 	"github.com/FlintyLemming/storage-analyzer/internal/scanner"
@@ -36,10 +38,11 @@ var ErrBusy = errors.New("scan already running")
 // ErrNotRunning is returned by Cancel when no scan is running.
 var ErrNotRunning = errors.New("no scan running")
 
-// Progress is written to run/progress.json while a scan or a duplicate
-// check runs. Job tells them apart; an empty Job (older binaries) is a scan.
+// Progress is written to run/progress.json while a scan, duplicate check, or
+// delete job runs. Job tells them apart; an empty Job (older binaries) is a scan.
 type Progress struct {
-	Job       string `json:"job"` // scan | dupcheck
+	Job       string `json:"job"` // scan | dupcheck | delete
+	JobID     string `json:"jobId,omitempty"`
 	ScanID    int64  `json:"scanId"`
 	PID       int    `json:"pid"`
 	Trigger   string `json:"trigger"`
@@ -60,6 +63,13 @@ type Progress struct {
 	TotalBytes int64  `json:"totalBytes,omitempty"`
 	CacheHits  int64  `json:"cacheHits,omitempty"`
 	Changed    int64  `json:"changed,omitempty"`
+
+	// Delete only.
+	Targets      int   `json:"targets,omitempty"`
+	DoneTargets  int   `json:"doneTargets,omitempty"`
+	DeletedItems int64 `json:"deletedItems,omitempty"`
+	FreedBytes   int64 `json:"freedBytes,omitempty"`
+	Failed       int   `json:"failed,omitempty"`
 }
 
 // VolumeMeta describes one scanned volume (stored as JSON in MetaVolumes).
@@ -75,14 +85,32 @@ type VolumeMeta struct {
 	FSFree     uint64 `json:"fsFree"`
 }
 
+// StatVolumes converts discovered volumes into VolumeMeta populated with
+// statfs capacity figures. EntryID is left 0; scans assign root IDs separately.
+func StatVolumes(vols []volumes.Volume) []VolumeMeta {
+	vm := make([]VolumeMeta, len(vols))
+	for i, v := range vols {
+		vm[i] = VolumeMeta{Name: v.Name, Pool: v.Pool, Device: v.Device, MountPoint: v.MountPoint, FSType: v.FSType}
+		var st syscall.Statfs_t
+		if syscall.Statfs(v.MountPoint, &st) == nil {
+			bs := uint64(st.Bsize)
+			vm[i].FSTotal = uint64(st.Blocks) * bs
+			vm[i].FSUsed = (uint64(st.Blocks) - uint64(st.Bfree)) * bs
+			vm[i].FSFree = uint64(st.Bavail) * bs
+		}
+	}
+	return vm
+}
+
 // Options configure Run.
 type Options struct {
-	DataDir  string
-	Trigger  string
-	Discover func() ([]volumes.Volume, []volumes.Skipped, error)
-	Now      func() time.Time
-	Workers  int
-	FS       dupcheck.FS // RunScheduled: filesystem for the duplicate check (default: real)
+	DataDir      string
+	Trigger      string
+	Discover     func() ([]volumes.Volume, []volumes.Skipped, error)
+	IsMountPoint func(path string, parentDev, dev uint64) bool // optional; nil uses scanner default
+	Now          func() time.Time
+	Workers      int
+	FS           dupcheck.FS // RunScheduled: filesystem for the duplicate check (default: real)
 
 	thenDupCheck bool // set by RunScheduled: a duplicate check follows
 }
@@ -207,7 +235,26 @@ func runScan(ctx context.Context, o Options, lock *os.File) (int64, error) {
 		return fail(err)
 	}
 
-	walker := &scanner.Walker{Workers: o.Workers}
+	type observedDir struct {
+		id       int64
+		path     string
+		children []scanner.DirChild
+	}
+	var obsMu sync.Mutex
+	var observed []observedDir
+
+	walker := &scanner.Walker{
+		Workers:      o.Workers,
+		IsMountPoint: o.IsMountPoint,
+		WatchDir: func(dirPath string) bool {
+			return docker.IsTargetName(filepath.Base(filepath.Clean(dirPath)))
+		},
+		OnDir: func(dirID int64, dirPath string, children []scanner.DirChild) {
+			obsMu.Lock()
+			observed = append(observed, observedDir{id: dirID, path: dirPath, children: children})
+			obsMu.Unlock()
+		},
+	}
 	prog := Progress{Job: "scan", ScanID: id, PID: os.Getpid(), Trigger: o.Trigger, StartedAt: started.Unix(), PrevFiles: prevFiles}
 	if o.thenDupCheck {
 		prog.Next = "dupcheck"
@@ -254,18 +301,55 @@ func runScan(ctx context.Context, o Options, lock *os.File) (int64, error) {
 		return fail(werr)
 	}
 
-	finished := o.Now()
-	vm := make([]VolumeMeta, len(vols))
-	var totalD, totalA int64
-	for i, v := range vols {
-		vm[i] = VolumeMeta{EntryID: int64(i + 1), Name: v.Name, Pool: v.Pool, Device: v.Device, MountPoint: v.MountPoint, FSType: v.FSType}
-		var st syscall.Statfs_t
-		if syscall.Statfs(v.MountPoint, &st) == nil {
-			bs := uint64(st.Bsize)
-			vm[i].FSTotal = uint64(st.Blocks) * bs
-			vm[i].FSUsed = (uint64(st.Blocks) - uint64(st.Bfree)) * bs
-			vm[i].FSFree = uint64(st.Bavail) * bs
+	if len(observed) > 0 {
+		type targetEntry struct {
+			id       int64
+			path     string
+			kind     string
+			children []scanner.DirChild
 		}
+		byRoot := map[string][]targetEntry{}
+		for _, obs := range observed {
+			rootPath, kind, ok := docker.FindRootForTarget(obs.path)
+			if !ok {
+				continue
+			}
+			byRoot[rootPath] = append(byRoot[rootPath], targetEntry{
+				id: obs.id, path: obs.path, kind: kind, children: obs.children,
+			})
+		}
+		tmpDir := filepath.Join(o.DataDir, "run")
+		for rootPath, targets := range byRoot {
+			res, err := docker.ResolveRoot(rootPath, tmpDir)
+			if err != nil {
+				log.Printf("docker resolve %s: %v", rootPath, err)
+				continue
+			}
+			for _, tgt := range targets {
+				if ws := res.Warnings(tgt.kind); len(ws) > 0 {
+					log.Printf("docker metadata partial for %s (%s): %v", tgt.path, tgt.kind, ws)
+				}
+				if da := res.DirAnnotation(tgt.kind); da != nil {
+					if b, err := json.Marshal(da); err == nil {
+						_ = w.AddAnnotation(tgt.id, "docker", string(b))
+					}
+				}
+				for _, ch := range tgt.children {
+					if ann := res.EntryAnnotation(tgt.kind, ch.Name, ch.Kind == scandb.KindDir); ann != nil {
+						if b, err := json.Marshal(ann); err == nil {
+							_ = w.AddAnnotation(ch.ID, "docker", string(b))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	finished := o.Now()
+	vm := StatVolumes(vols)
+	var totalD, totalA int64
+	for i := range vm {
+		vm[i].EntryID = int64(i + 1)
 		r := sink.roots[int64(i+1)]
 		totalD += r.DSize
 		totalA += r.ASize
@@ -360,8 +444,10 @@ func CleanupStaleTmp(dataDir string) error {
 	defer lock.Close()
 	matches, _ := filepath.Glob(filepath.Join(dataDir, "scans", "*.tmp"))
 	more, _ := filepath.Glob(filepath.Join(dataDir, "scans", "*.compact"))
-	for _, m := range append(matches, more...) {
-		if err := os.Remove(m); err != nil {
+	reqs, _ := filepath.Glob(filepath.Join(dataDir, "run", "delete-req-*.json"))
+	all := append(append(matches, more...), reqs...)
+	for _, m := range all {
+		if err := os.Remove(m); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}

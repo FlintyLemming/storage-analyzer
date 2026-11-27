@@ -34,11 +34,22 @@ type Stats struct {
 	Current                    atomic.Value // string: directory being listed
 }
 
+// DirChild describes one direct child of a watched directory.
+type DirChild struct {
+	ID   int64
+	Name string
+	Kind int
+}
+
 // Walker walks trees. The zero value is ready to use.
 type Walker struct {
-	Workers      int                                         // default 4
-	IsMountPoint func(path string, rootDev, dev uint64) bool // default: dev != rootDev
+	Workers      int                                                    // default 4
+	IsMountPoint func(path string, parentDev, dev uint64) bool          // default: dev != parentDev
+	WatchDir     func(dirPath string) bool                              // optional filter for OnDir
+	OnDir        func(dirID int64, dirPath string, children []DirChild) // optional, called concurrently
 	Stats        Stats
+
+	lstat func(path string, st *syscall.Stat_t) error // default: syscall.Lstat
 }
 
 type dirNode struct {
@@ -46,7 +57,7 @@ type dirNode struct {
 	parent       *dirNode
 	name         []byte
 	path         string
-	rootDev      uint64
+	dev          uint64
 	mtime        int64
 	flags        int
 
@@ -58,6 +69,7 @@ type dirNode struct {
 
 type walkState struct {
 	w      *Walker
+	lstat  func(path string, st *syscall.Stat_t) error
 	ctx    context.Context
 	cancel context.CancelCauseFunc
 	nextID atomic.Int64
@@ -80,14 +92,18 @@ func (w *Walker) Walk(ctx context.Context, roots []Root, sink Sink) error {
 		w.Workers = 4
 	}
 	if w.IsMountPoint == nil {
-		w.IsMountPoint = func(_ string, rootDev, dev uint64) bool { return dev != rootDev }
+		w.IsMountPoint = func(_ string, parentDev, dev uint64) bool { return dev != parentDev }
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	lstat := w.lstat
+	if lstat == nil {
+		lstat = syscall.Lstat
+	}
 	cctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	k := &walkState{w: w, ctx: cctx, cancel: cancel, out: make(chan []scandb.Entry, 256), links: map[[2]uint64]struct{}{}}
+	k := &walkState{w: w, lstat: lstat, ctx: cctx, cancel: cancel, out: make(chan []scandb.Entry, 256), links: map[[2]uint64]struct{}{}}
 	k.qcond = sync.NewCond(&k.qmu)
 	k.nextID.Store(int64(len(roots)))
 
@@ -113,14 +129,14 @@ func (w *Walker) Walk(ctx context.Context, roots []Root, sink Sink) error {
 		n := &dirNode{id: int64(i + 1), name: []byte(r.Name), path: r.Path}
 		n.pending.Store(1)
 		var st syscall.Stat_t
-		if err := syscall.Lstat(r.Path, &st); err != nil {
+		if err := k.lstat(r.Path, &st); err != nil {
 			n.flags |= scandb.FlagError
 			w.Stats.Errors.Add(1)
 			k.finishListing(n)
 			continue
 		}
 		dev, _, _, mtime := statFields(&st)
-		n.rootDev, n.mtime = dev, mtime
+		n.dev, n.mtime = dev, mtime
 		n.dsize, n.asize = st.Blocks*512, st.Size
 		k.push(n)
 	}
@@ -232,6 +248,11 @@ func (k *walkState) list(n *dirNode) {
 	cnt := int64(len(names))
 	first := k.nextID.Add(cnt) - cnt + 1
 	batch := make([]scandb.Entry, 0, len(names))
+	watch := w.OnDir != nil && (w.WatchDir == nil || w.WatchDir(n.path))
+	var watched []DirChild
+	if watch {
+		watched = make([]DirChild, 0, len(names))
+	}
 	var subdirs []*dirNode
 	var dsum, asum int64
 	for i, name := range names {
@@ -239,26 +260,35 @@ func (k *walkState) list(n *dirNode) {
 		e := scandb.Entry{ID: first + int64(i), Parent: n.id, Name: []byte(name)}
 		e.Flags = nameFlags(e.Name)
 		var st syscall.Stat_t
-		if err := syscall.Lstat(p, &st); err != nil {
+		if err := k.lstat(p, &st); err != nil {
 			e.Kind = scandb.KindOther
 			e.Flags |= scandb.FlagError
 			w.Stats.Errors.Add(1)
 			batch = append(batch, e)
+			if watch {
+				watched = append(watched, DirChild{ID: e.ID, Name: name, Kind: e.Kind})
+			}
 			continue
 		}
 		dev, ino, nlink, mtime := statFields(&st)
 		e.MTime = mtime
 		mode := uint32(st.Mode) & syscall.S_IFMT
-		if w.IsMountPoint(p, n.rootDev, dev) {
+		if w.IsMountPoint(p, n.dev, dev) {
 			e.Kind = scandb.KindMount
 			batch = append(batch, e)
+			if watch {
+				watched = append(watched, DirChild{ID: e.ID, Name: name, Kind: e.Kind})
+			}
 			continue
 		}
 		if mode == syscall.S_IFDIR {
-			c := &dirNode{id: e.ID, parentID: n.id, parent: n, name: e.Name, path: p, rootDev: n.rootDev, mtime: mtime, flags: e.Flags}
+			c := &dirNode{id: e.ID, parentID: n.id, parent: n, name: e.Name, path: p, dev: dev, mtime: mtime, flags: e.Flags}
 			c.dsize, c.asize = st.Blocks*512, st.Size
 			c.pending.Store(1)
 			subdirs = append(subdirs, c)
+			if watch {
+				watched = append(watched, DirChild{ID: e.ID, Name: name, Kind: scandb.KindDir})
+			}
 			continue
 		}
 		switch mode {
@@ -279,6 +309,12 @@ func (k *walkState) list(n *dirNode) {
 			w.Stats.Bytes.Add(e.DSize)
 		}
 		batch = append(batch, e)
+		if watch {
+			watched = append(watched, DirChild{ID: e.ID, Name: name, Kind: e.Kind})
+		}
+	}
+	if watch {
+		w.OnDir(n.id, n.path, watched)
 	}
 	n.mu.Lock()
 	n.dsize += dsum

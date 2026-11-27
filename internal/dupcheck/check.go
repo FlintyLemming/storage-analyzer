@@ -193,6 +193,11 @@ func Run(ctx context.Context, o Options) (Summary, error) {
 					return
 				}
 			}
+			if e.Parent != 0 {
+				if _, ok := dirs[e.Parent]; !ok {
+					continue
+				}
+			}
 			if e.Kind == scandb.KindSymlink && !dirs[e.Parent].Ignored {
 				if fsPath, ok := pt.path(e.Parent, e.Name, false); ok {
 					if t, err := o.FS.Readlink(fsPath); err == nil {

@@ -27,6 +27,7 @@ import (
 	"github.com/FlintyLemming/storage-analyzer/internal/auth"
 	"github.com/FlintyLemming/storage-analyzer/internal/catalog"
 	"github.com/FlintyLemming/storage-analyzer/internal/config"
+	"github.com/FlintyLemming/storage-analyzer/internal/deleter"
 	"github.com/FlintyLemming/storage-analyzer/internal/mounts"
 	"github.com/FlintyLemming/storage-analyzer/internal/runner"
 	"github.com/FlintyLemming/storage-analyzer/internal/scheduler"
@@ -38,7 +39,7 @@ import (
 // Generic Linux flavor, configured by a config file. Also what builds on
 // macOS for development.
 
-const usage = "scan|dupcheck|prune|version|serve|passwd"
+const usage = "scan|dupcheck|delete|prune|version|serve|passwd"
 
 type platformFlags struct {
 	config string
@@ -74,10 +75,13 @@ func newApp(pf *platformFlags) (*app, error) {
 		return nil, err
 	}
 	return &app{
-		data:      cfg.DataDir,
-		bin:       exe,
-		discover:  func() ([]volumes.Volume, []volumes.Skipped, error) { return mounts.Discover(cfg) },
-		childArgs: []string{"--config", absConfig},
+		data:         cfg.DataDir,
+		bin:          exe,
+		discover:     func() ([]volumes.Volume, []volumes.Skipped, error) { return mounts.Discover(cfg) },
+		mountCheck:   mounts.NewBoundaryChecker,
+		childArgs:    []string{"--config", absConfig},
+		allowDelete:  cfg.AllowDelete,
+		deletePolicy: deleter.DefaultPolicy("linux", cfg.DataDir, absConfig, cfg.PasswordPath()),
 	}, nil
 }
 
@@ -126,7 +130,16 @@ func serve(a *app, pf *platformFlags) error {
 	login := auth.NewLogin(pw, sessions, auth.NewLimiter(), cfg.TrustedProxies)
 
 	spawn := func(args ...string) error { return spawnChild(a, args...) }
-	apiH := api.New(api.Config{DataDir: a.data, BinPath: a.bin, Auth: login, Spawn: spawn, LoginKind: "password"})
+	apiH := api.New(api.Config{
+		DataDir:       a.data,
+		BinPath:       a.bin,
+		Auth:          login,
+		Discover:      a.discover,
+		Spawn:         spawn,
+		LoginKind:     "password",
+		DeleteEnabled: a.allowDelete,
+		DeletePolicy:  a.deletePolicy,
+	})
 	srv := server.NewServer(cfg.Listen, server.Handler(server.Options{API: apiH, Login: login, Static: web.Files}))
 	useTLS := cfg.TLSCert != ""
 	scheme := "http"
@@ -217,8 +230,11 @@ func serveDev(a *app, pf *platformFlags) error {
 	os.MkdirAll(filepath.Join(a.data, "scans"), 0o755)
 	h := api.New(api.Config{
 		DataDir: a.data, BinPath: a.bin,
-		Auth:  allowAll{},
-		Spawn: func(args ...string) error { return spawnChild(a, args...) },
+		Auth:          allowAll{},
+		Discover:      a.discover,
+		Spawn:         func(args ...string) error { return spawnChild(a, args...) },
+		DeleteEnabled: a.allowDelete,
+		DeletePolicy:  a.deletePolicy,
 		ApplySchedule: func(s catalog.Settings) error {
 			log.Printf("(dev) skip apply schedule %+v", s)
 			return nil

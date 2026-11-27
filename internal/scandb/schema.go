@@ -22,10 +22,14 @@ const (
 	FlagError       = 1 // stat/readdir failed
 	FlagHardlinkDup = 2 // hard link already counted elsewhere; not in parent totals
 	FlagBadName     = 4 // name is not valid UTF-8
+	FlagDeleted     = 8 // entry deleted from disk after scan
 )
 
 // MetaRoots is the meta key holding the number of volume roots.
 const MetaRoots = "roots"
+
+// MetaDeletedCount is the meta key tracking how many entries have been marked deleted.
+const MetaDeletedCount = "deletedCount"
 
 // ErrNotFound is returned when an entry id does not exist.
 var ErrNotFound = errors.New("entry not found")
@@ -44,6 +48,12 @@ type Entry struct {
 	NChild     int64
 }
 
+// Annotation is structured metadata attached to one entry during a scan.
+type Annotation struct {
+	Kind string
+	Data string
+}
+
 const schemaSQL = `
 CREATE TABLE entries(
   id          INTEGER PRIMARY KEY,
@@ -59,6 +69,11 @@ CREATE TABLE entries(
   nchild      INTEGER NOT NULL
 );
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE annotations(
+  id   INTEGER PRIMARY KEY,
+  kind TEXT    NOT NULL,
+  data TEXT    NOT NULL
+);
 `
 
 const entryCols = `id, parent, name, kind, flags, dsize, asize, items, mtime, first_child, nchild`

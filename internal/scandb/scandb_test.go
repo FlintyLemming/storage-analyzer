@@ -2,6 +2,7 @@ package scandb
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"math/rand"
 	"os"
@@ -276,5 +277,187 @@ func TestEachDescOrder(t *testing.T) {
 	}
 	if fmt.Sprint(all) != "[3 2 1]" || fmt.Sprint(dirs) != "[1 2]" {
 		t.Fatalf("desc %v dirs %v", all, dirs)
+	}
+}
+
+func TestAnnotationsRoundTrip(t *testing.T) {
+	d := newDB(t, func(w *Writer) {
+		add(t, w, Entry{ID: 1, Name: []byte("Vol"), Kind: KindDir, FirstChild: 2, NChild: 600})
+		for i := 0; i < 600; i++ {
+			id := int64(2 + i)
+			add(t, w, Entry{ID: id, Parent: 1, Name: []byte(fmt.Sprintf("d%04d", i)), Kind: KindDir})
+			if i%2 == 0 {
+				if err := w.AddAnnotation(id, "docker", fmt.Sprintf(`{"type":"image_layer","label":"img-%d"}`, i)); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if err := w.AddAnnotation(1, "docker", `{"type":"dir_overlay2"}`); err != nil {
+			t.Fatal(err)
+		}
+		w.SetMeta(MetaRoots, "1")
+	})
+
+	// Query >500 IDs at once to exercise chunking.
+	queryIDs := make([]int64, 0, 601)
+	queryIDs = append(queryIDs, 1)
+	for i := 0; i < 600; i++ {
+		queryIDs = append(queryIDs, int64(2+i))
+	}
+	got, err := d.Annotations(queryIDs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 301 {
+		t.Fatalf("len(got) = %d, want 301", len(got))
+	}
+	if got[1].Kind != "docker" || got[1].Data != `{"type":"dir_overlay2"}` {
+		t.Fatalf("got[1] = %+v", got[1])
+	}
+	if got[2].Kind != "docker" || got[2].Data != `{"type":"image_layer","label":"img-0"}` {
+		t.Fatalf("got[2] = %+v", got[2])
+	}
+	if _, ok := got[3]; ok {
+		t.Fatalf("unexpected annotation for id 3: %+v", got[3])
+	}
+	// Empty slice returns empty map without error.
+	empty, err := d.Annotations(nil)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty = %v err=%v", empty, err)
+	}
+}
+
+func TestAnnotationsLegacyDBWithoutTable(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "legacy.db")
+	raw, err := sql.Open("sqlite", "file:"+p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = raw.Exec(`
+		CREATE TABLE entries(id INTEGER PRIMARY KEY, parent INTEGER NOT NULL, name BLOB NOT NULL, kind INTEGER NOT NULL, flags INTEGER NOT NULL, dsize INTEGER NOT NULL, asize INTEGER NOT NULL, items INTEGER NOT NULL, mtime INTEGER NOT NULL, first_child INTEGER NOT NULL, nchild INTEGER NOT NULL);
+		CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+		INSERT INTO entries VALUES (1, 0, X'566f6c', 1, 0, 0, 0, 0, 0, 0, 0);
+		INSERT INTO meta VALUES ('roots', '1');
+	`)
+	raw.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	got, err := d.Annotations([]int64{1})
+	if err != nil {
+		t.Fatalf("Annotations on legacy DB failed: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got = %v, want empty", got)
+	}
+}
+
+func TestMarkDeletedUpdatesTreeAndQueries(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "scan.db")
+	w, err := Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Tree:
+	// 1 Vol (dsize=150, asize=160, items=5)
+	// ├── 2 dirA (dsize=110, asize=115, items=2)
+	// │   ├── 5 f1 (dsize=100, asize=105)
+	// │   └── 6 f2_hl (dsize=100, asize=105, FlagHardlinkDup)
+	// ├── 3 f3 (dsize=30, asize=35)
+	// └── 4 dirB (dsize=10, asize=10, items=0)
+	add(t, w, Entry{ID: 1, Parent: 0, Name: []byte("Vol"), Kind: KindDir, DSize: 150, ASize: 160, Items: 5, FirstChild: 2, NChild: 3})
+	add(t, w, Entry{ID: 2, Parent: 1, Name: []byte("dirA"), Kind: KindDir, DSize: 110, ASize: 115, Items: 2, FirstChild: 5, NChild: 2})
+	add(t, w, Entry{ID: 3, Parent: 1, Name: []byte("f3"), Kind: KindFile, DSize: 30, ASize: 35})
+	add(t, w, Entry{ID: 4, Parent: 1, Name: []byte("dirB"), Kind: KindDir, DSize: 10, ASize: 10, Items: 0})
+	add(t, w, Entry{ID: 5, Parent: 2, Name: []byte("f1"), Kind: KindFile, DSize: 100, ASize: 105})
+	add(t, w, Entry{ID: 6, Parent: 2, Name: []byte("f2_hl"), Kind: KindFile, DSize: 100, ASize: 105, Flags: FlagHardlinkDup})
+	w.SetMeta(MetaRoots, "1")
+	w.SetMeta("volumes", `[{"entryId":1,"fsFree":100}]`)
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete hardlink dup (6) first: items decreases by 1, sizes unchanged.
+	tot, err := MarkDeleted(p, []int64{6}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tot.Count != 1 || tot.DSize != 0 || tot.ASize != 0 || tot.Items != 1 {
+		t.Fatalf("hardlink delete totals = %+v", tot)
+	}
+
+	d, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirA, err := d.Get(2)
+	if err != nil || dirA.DSize != 110 || dirA.ASize != 115 || dirA.Items != 1 {
+		t.Fatalf("dirA after hardlink delete = %+v err=%v", dirA, err)
+	}
+	vol, err := d.Get(1)
+	if err != nil || vol.DSize != 150 || vol.ASize != 160 || vol.Items != 4 {
+		t.Fatalf("vol after hardlink delete = %+v err=%v", vol, err)
+	}
+	if _, err := d.Get(6); err != ErrNotFound {
+		t.Fatalf("Get(6) = %v, want ErrNotFound", err)
+	}
+	ch, total, err := d.Children(2, ListOpts{Sort: "size", Desc: true, Limit: 10})
+	if err != nil || total != 1 || fmt.Sprint(ids(ch)) != "[5]" {
+		t.Fatalf("dirA children = %v total=%d err=%v", ids(ch), total, err)
+	}
+	d.Close()
+
+	// Delete dirA (2) and f3 (3), plus pass descendant (5) redundantly and volume root (1) which must be ignored.
+	tot, err = MarkDeleted(p, []int64{2, 5, 3, 1}, `[{"entryId":1,"fsFree":240}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// dirA contributed dsize=110, asize=115, items=1+1=2; f3 contributed dsize=30, asize=35, items=1.
+	if tot.Count != 2 || tot.DSize != 140 || tot.ASize != 150 || tot.Items != 3 {
+		t.Fatalf("second delete totals = %+v", tot)
+	}
+
+	// Reopen strictly read-only (?mode=ro) and verify every reader API.
+	d, err = Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	vol, err = d.Get(1)
+	if err != nil || vol.DSize != 10 || vol.ASize != 10 || vol.Items != 1 {
+		t.Fatalf("vol = %+v err=%v", vol, err)
+	}
+	root, err := d.Get(0)
+	if err != nil || root.DSize != 10 || root.ASize != 10 {
+		t.Fatalf("root = %+v err=%v", root, err)
+	}
+	if _, err := d.Get(2); err != ErrNotFound {
+		t.Fatalf("Get(2) = %v", err)
+	}
+	if _, err := d.Path(5); err != ErrNotFound {
+		t.Fatalf("Path(descendant 5) = %v, want ErrNotFound", err)
+	}
+	ch, total, err = d.Children(1, ListOpts{Sort: "size", Desc: true, Limit: 10})
+	if err != nil || total != 1 || fmt.Sprint(ids(ch)) != "[4]" {
+		t.Fatalf("vol children = %v total=%d err=%v", ids(ch), total, err)
+	}
+	meta, err := d.Meta()
+	if err != nil || meta["volumes"] != `[{"entryId":1,"fsFree":240}]` || meta[MetaDeletedCount] != "3" {
+		t.Fatalf("meta = %v err=%v", meta, err)
+	}
+	var dirs []int64
+	if err := d.EachDir(func(e Entry) error { dirs = append(dirs, e.ID); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(dirs) != "[1 4]" {
+		t.Fatalf("EachDir = %v, want [1 4]", dirs)
 	}
 }

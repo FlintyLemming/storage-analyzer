@@ -69,6 +69,11 @@ func TestIndexPlatform(t *testing.T) {
 		if rec.Code != 200 || !strings.Contains(rec.Body.String(), `<html lang="en" data-platform="linux">`) {
 			t.Errorf("%s: code %d, body lacks data-platform", p, rec.Code)
 		}
+		for _, attr := range []string{`href="style.css?v=`, `src="i18n.js?v=`, `src="app.js?v=`} {
+			if !strings.Contains(rec.Body.String(), attr) {
+				t.Errorf("%s: body lacks cache-busted %s", p, attr)
+			}
+		}
 	}
 }
 

@@ -11,6 +11,12 @@ import (
 
 const batchRows = 16 // modernc binds parameters in O(n^2); small batches are ~15x faster than 1000-row batches
 
+type annotationRow struct {
+	id   int64
+	kind string
+	data string
+}
+
 // Writer writes a new scan database. It is not safe for concurrent use.
 type Writer struct {
 	path  string
@@ -18,6 +24,7 @@ type Writer struct {
 	tx    *sql.Tx
 	full  *sql.Stmt // prepared INSERT for a full batch
 	buf   []Entry
+	anns  []annotationRow
 	meta  map[string]string
 	inTx  int
 	close bool
@@ -127,6 +134,13 @@ func (w *Writer) SetMeta(key, value string) error {
 	return nil
 }
 
+// AddAnnotation records a metadata annotation for entry id; annotations are
+// written on Close.
+func (w *Writer) AddAnnotation(id int64, kind, data string) error {
+	w.anns = append(w.anns, annotationRow{id: id, kind: kind, data: data})
+	return nil
+}
+
 // Close flushes, writes meta and compacts the file (rows arrive out of id
 // order, so pages are fragmented; VACUUM INTO rewrites them densely without
 // needing the system temp directory).
@@ -134,6 +148,21 @@ func (w *Writer) Close() error {
 	if err := w.flush(); err != nil {
 		w.Abort()
 		return err
+	}
+	if len(w.anns) > 0 {
+		stmt, err := w.tx.Prepare("INSERT OR REPLACE INTO annotations(id, kind, data) VALUES (?, ?, ?)")
+		if err != nil {
+			w.Abort()
+			return err
+		}
+		for _, a := range w.anns {
+			if _, err := stmt.Exec(a.id, a.kind, a.data); err != nil {
+				stmt.Close()
+				w.Abort()
+				return err
+			}
+		}
+		stmt.Close()
 	}
 	for k, v := range w.meta {
 		if _, err := w.tx.Exec("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", k, v); err != nil {

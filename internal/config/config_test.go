@@ -21,7 +21,7 @@ func TestParse(t *testing.T) {
 		{
 			name: "empty",
 			in:   "",
-			want: Config{Listen: ":8099", DataDir: "/var/lib/storage-analyzer"},
+			want: Config{Listen: ":8099", DataDir: "/var/lib/storage-analyzer", AllowDelete: true},
 		},
 		{
 			name: "spec example",
@@ -33,6 +33,7 @@ trusted_proxies = 127.0.0.1, ::1
 data_dir = /var/lib/storage-analyzer
 paths = auto
 exclude = /boot/efi, /mnt/backup
+allow_delete = false
 `,
 			want: Config{
 				Listen:         ":8099",
@@ -41,30 +42,37 @@ exclude = /boot/efi, /mnt/backup
 				TrustedProxies: []netip.Prefix{pfx("127.0.0.1/32"), pfx("::1/128")},
 				DataDir:        "/var/lib/storage-analyzer",
 				Exclude:        []string{"/boot/efi", "/mnt/backup"},
+				AllowDelete:    false,
 			},
+		},
+		{
+			name: "allow_delete true explicit",
+			in:   "allow_delete = true\n",
+			want: Config{Listen: ":8099", DataDir: "/var/lib/storage-analyzer", AllowDelete: true},
 		},
 		{
 			name: "paths list cleaned",
 			in:   "paths = /, /srv/data/\n",
-			want: Config{Listen: ":8099", DataDir: "/var/lib/storage-analyzer", Paths: []string{"/", "/srv/data"}},
+			want: Config{Listen: ":8099", DataDir: "/var/lib/storage-analyzer", Paths: []string{"/", "/srv/data"}, AllowDelete: true},
 		},
 		{
 			name: "trusted proxies",
 			in:   "trusted_proxies = 127.0.0.1, ::1, 10.0.0.0/8\n",
 			want: Config{Listen: ":8099", DataDir: "/var/lib/storage-analyzer",
-				TrustedProxies: []netip.Prefix{pfx("127.0.0.1/32"), pfx("::1/128"), pfx("10.0.0.0/8")}},
+				TrustedProxies: []netip.Prefix{pfx("127.0.0.1/32"), pfx("::1/128"), pfx("10.0.0.0/8")}, AllowDelete: true},
 		},
 		{
 			name: "trusted proxy cidr masked",
 			in:   "trusted_proxies = 10.1.2.3/8\n",
 			want: Config{Listen: ":8099", DataDir: "/var/lib/storage-analyzer",
-				TrustedProxies: []netip.Prefix{pfx("10.0.0.0/8")}},
+				TrustedProxies: []netip.Prefix{pfx("10.0.0.0/8")}, AllowDelete: true},
 		},
 		{
 			name: "crlf bom spaces comments blanks",
 			in:   "\xef\xbb\xbf# comment\r\n\r\n   listen   =   127.0.0.1:9000  \r\n  # another\r\ndata_dir=/data\r\n",
-			want: Config{Listen: "127.0.0.1:9000", DataDir: "/data"},
+			want: Config{Listen: "127.0.0.1:9000", DataDir: "/data", AllowDelete: true},
 		},
+		{name: "bad allow_delete", in: "allow_delete = yes\n", wantErr: "line 1"},
 		{name: "unknown key", in: "\nlistn = :1\n", wantErr: `line 2: unknown key "listn"`},
 		{name: "duplicate key", in: "listen = :1\nlisten = :2\n", wantErr: "line 2"},
 		{name: "no equals", in: "listen = :1\nfoo\n", wantErr: "line 2"},
