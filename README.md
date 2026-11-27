@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-An ncdu-style disk usage analyzer with a web interface, for QNAP QTS, fnOS (飞牛), and ordinary Linux servers. It scans your disks, lets you drill down folder by folder to see what is taking up space, finds files and folders with identical content, and keeps a history of past scans. On QNAP and fnOS it opens as a window on the NAS desktop, like the built-in apps; on Linux it runs as a systemd service you open in the browser.
+An ncdu-style disk usage analyzer with a web interface, for Linux servers, QNAP QTS, and fnOS (飞牛). It scans your disks, lets you drill down folder by folder to see what is taking up space, attributes Docker storage usage, finds files and folders with identical content, lets you safely delete unneeded items, and keeps a history of past scans.
 
 ![All volumes: capacity of each data volume, split into scanned files, space not accounted for, and free space](docs/images/volumes.png)
 
@@ -10,71 +10,71 @@ An ncdu-style disk usage analyzer with a web interface, for QNAP QTS, fnOS (飞�
 
 ## Features
 
-- **Scans every data volume.** On QNAP, volumes on all storage pools are found automatically; system partitions are skipped, and so are volumes that aren't mounted, such as locked encrypted volumes. On fnOS, all storage spaces (`/vol1`, `/vol2`, …) are scanned automatically, with optional switches in App Settings to also include the system partition `/` or external storage. On Linux, local disk filesystems are discovered automatically, or you can list the directories to scan.
+- **Automatic volume discovery.** Discovers local disk filesystems on Linux (or scans a custom path list), all storage-pool data volumes on QNAP QTS, and all storage spaces (`/vol1`, `/vol2`, …) on fnOS.
 - **Folder-by-folder drill-down.** Sort by size, name, item count or modified time. Switch between *Disk usage* (space taken on disk) and *Apparent size* (size of the file contents).
 - **Accounts for the whole volume.** Each volume's bar shows the scanned files, space that isn't accounted for by any file (snapshots, file system metadata, etc.) and free space.
+- **Docker storage attribution.** Detects Docker `overlay2`, `containers`, `volumes` and BuildKit cache directories and labels each entry with its owning images, containers, or volumes (as well as unreferenced directories).
 - **Duplicate finder.** Finds files and folders with identical content, verified with a full SHA-256 hash. When two whole folders are identical, only the largest identical folder is listed, not everything inside it.
+- **Delete files with safety guardrails.** Delete individual files or folders directly, or stage items across multiple folders and the Duplicates view in a **Delete basket** before removing them together. Volume roots, mount points, critical system paths, app data/config directories and older scan snapshots are protected; Linux and fnOS deployments can also disable deletion for read-only use.
 - **Scheduled or on-demand scans.** Run a scan by hand, or daily or weekly at a set time, optionally followed by a duplicate check.
 - **Scan history.** Keeps the most recent successful scans (10 by default), so you can open an older scan and browse it in full.
-- **Stays out of the way.** Scans and duplicate checks run at the lowest CPU and I/O priority. The QNAP version has no background process between them; the fnOS and Linux versions are resident services that use no CPU while idle.
-- **Delete files with safety guardrails.** Delete individual files or folders directly, or stage items across multiple folders and the Duplicates view in a **Delete basket** before removing them together. Volume roots, mount points, critical system paths and older scan snapshots are protected; fnOS and Linux deployments can also disable deletion for read-only use.
-- **English and Chinese UI**, following the QTS language on QNAP and the browser language on fnOS and Linux.
+- **Stays out of the way.** Scans, duplicate checks and deletions run at the lowest CPU and I/O priority. The resident services on Linux and fnOS use no CPU while idle; the QNAP version has no background process between tasks.
+- **English and Chinese UI**, following the browser language on Linux and fnOS and the QTS language on QNAP.
 
-## QNAP QTS
+## Usage
 
-### Requirements
+### Scanning
 
-- QTS 5.0 or later
-- One of these architectures:
-  - `x86_64`: Intel and AMD models
-  - `arm_64`: 64-bit ARM models
-  - `arm-x41`: 32-bit ARM models with an Annapurna Labs Alpine CPU, such as TS-x31P, TS-x31X and TS-x31K
-- A QTS administrator account. The app shows the names of every user's files, so only administrators can open it.
+Click **New scan**. Progress is shown at the top of the window, and you can keep browsing older results while it runs. A scan usually takes a few minutes to tens of minutes, depending on how many files you have.
 
-> [!NOTE]
-> The ARM packages are built and tested under emulation but haven't been tried on a real ARM NAS yet. If you run one, feedback is welcome.
+Use the **Scan** picker to switch between saved scans. **History** lists every scan with its time, trigger, status, total size, file count and duration, and lets you open or delete one.
 
-### Installation
+### Browsing
 
-1. Download the `.qpkg` for your NAS's architecture from [Releases](https://github.com/FlintyLemming/storage-analyzer/releases/latest).
-2. The package isn't signed by QNAP, so allow unsigned apps first: in **App Center**, open **Settings** (gear icon) → **General** and turn on **Allow installation of applications without a valid digital signature**.
-3. In App Center, click **Install Manually** (the icon next to the gear), choose the downloaded file and confirm.
-4. Open **Storage Analyzer** from the QTS main menu.
+The top level shows each scanned volume or filesystem. Click a folder to open it, and use the breadcrumbs or **.. Up one level** to go back. Click a column header to sort by it.
 
-To update, install the newer `.qpkg` the same way. Your scan history and settings are kept.
+Hard links are counted only once (the other links are tagged), symbolic links aren't followed, and scans don't cross into other mounted file systems.
 
-## fnOS (飞牛)
+### Duplicates
 
-### Requirements
+Switch to **Duplicates** and click **Start duplicate check**. Groups of identical files and folders are listed largest first, with how much space removing the extra copies would free up. **↗ Show location** opens the folder in the Space view.
 
-- fnOS `1.1.3100` or later (required for Unified Gateway)
-- One of these architectures:
-  - `x86`: x86_64 Intel and AMD devices
-  - `arm`: 64-bit ARM devices
-- A fnOS administrator account. The app shows every user's file names and is restricted to administrators via the fnOS Unified Gateway.
+- Folders count as identical when their file names, subfolder structure and file contents all match; the folders' own names may differ.
+- Empty files and hard links aren't reported as duplicates. Thumbnail and system files (`@__thumb`, `.@__thumb`, `@eaDir`, `.DS_Store`, `Thumbs.db`, `._*`) are ignored.
+- Files that changed after the scan are left out of the comparison.
+- Hashes are cached between checks. The first check reads every candidate file and can take a few hours; later checks only read new or changed files and usually take minutes to an hour.
 
-### Installation
+### Deleting files
 
-1. Download `storage-analyzer_<version>_fnos_<arch>.fpk` for your device from [Releases](https://github.com/FlintyLemming/storage-analyzer/releases/latest).
-2. In **App Center**, click **Manual Install** (手动安装), choose the `.fpk` file, pick the storage volume to install to, and confirm. Or install over SSH:
+When viewing the latest completed scan, you can delete individual items directly or check files and folders across different directories and the **Duplicates** view to collect them in the **Delete basket** at the bottom of the window, then review and permanently delete everything in one batch.
 
-   ```bash
-   sudo appcenter-cli install-fpk storage-analyzer_<version>_fnos_x86.fpk
-   ```
+- Deletions are permanent (no recycle bin) and run in the background with live progress and a stop button, updating the scan totals and duplicate list automatically once finished.
+- In **Duplicates**, the UI prevents staging or deleting the last remaining copy of a group (use the Space view if you intentionally want to remove every copy).
+- Historical scans are read-only; volume roots, mount points, critical OS paths, and Storage Analyzer's own data/config directories cannot be deleted; Docker internal directories require an extra risk confirmation.
+- Deletion can be disabled completely on Linux (`allow_delete = false` in `/etc/storage-analyzer/config`) and on fnOS (via **App Center → Storage Analyzer → Settings**).
 
-3. Open **Storage Analyzer** from the fnOS desktop or App Center.
+### Settings
 
-No extra port or separate password is needed: it registers on the fnOS Unified Gateway (`/app/storage-analyzer/`) over a local Unix socket (`app.sock`), reusing your fnOS administrator session and working over HTTP, HTTPS, and fnConnect.
+- **Scheduled scan:** off, daily or weekly, at a time in the server's local time zone.
+- **Check for duplicates after the scan:** runs a duplicate check on each scheduled scan once it finishes.
+- **Keep results:** how many recent successful scans to keep (1–100). Each result takes tens to hundreds of MB.
+- **Default size:** whether to show *Disk usage* or *Apparent size* by default.
 
-To configure optional settings (also scanning the system partition `/` or external storage, or disabling file deletion for read-only mode), open **App Center → Storage Analyzer → Settings**. Scan databases and logs live in the app's `@appdata` directory (`TRIM_PKGVAR`). To update, install the newer `.fpk`; scan history and settings are preserved.
+## Supported Platforms
 
-## Linux
+| Platform | Packages | Architectures | Access & Auth | Default Scan Scope |
+| --- | --- | --- | --- | --- |
+| **[Linux](#linux)** | `.deb`, `.rpm`, `.tar.gz` | `amd64`, `arm64`, `armv7` | Standalone web server (`:8099`) with built-in password sign-in | Local disk filesystems (configurable `paths` / `exclude`) |
+| **[QNAP QTS](#qnap-qts)** | `.qpkg` | `x86_64`, `arm_64`, `arm-x41` | QTS desktop window via CGI, QTS administrator session | All mounted storage-pool data volumes |
+| **[fnOS (飞牛)](#fnos-飞牛)** | `.fpk` | `x86`, `arm` | fnOS desktop window via Unified Gateway, fnOS administrator session | All storage spaces (`/vol1`, `/vol2`, …), optional `/` & external storage |
+
+### Linux
 
 Runs as a systemd service on `x86_64`, `arm64` and `armv7`.
 
-### Installation
+#### Installation
 
-Download the package for your system from [Releases](https://github.com/FlintyLemming/storage-analyzer/releases/latest). Each release has these files, plus a `SHA256SUMS` file:
+Download the package for your system from [Releases](https://github.com/FlintyLemming/storage-analyzer/releases/latest). Each release includes these files plus a `SHA256SUMS` file:
 
 - `storage-analyzer_<version>_linux_{amd64,arm64,armv7}.tar.gz`
 - `storage-analyzer_<version>_{amd64,arm64,armhf}.deb`
@@ -118,11 +118,11 @@ Download the package for your system from [Releases](https://github.com/FlintyLe
 
 The service runs as the dedicated non-root user `storage-analyzer` with systemd sandboxing (`ProtectSystem=full`, keeping `/usr`, `/boot`, `/efi`, `/etc`, and system library/binary directories read-only) and `CAP_DAC_READ_SEARCH`, `CAP_DAC_OVERRIDE`, and `CAP_FOWNER` capabilities so it can scan and delete user data files without running as root. Data is kept in `/var/lib/storage-analyzer`, the configuration is `/etc/storage-analyzer/config`, the password hash is `/etc/storage-analyzer/password`, and logs go to the journal (`journalctl -u storage-analyzer`). Scans, duplicate checks, and deletions run at the lowest CPU and I/O priority as child processes.
 
-### What gets scanned
+#### What gets scanned
 
 By default it discovers local disk filesystems from the mount table (ext2/3/4, xfs, btrfs, zfs, f2fs, bcachefs, jfs, reiserfs, ntfs/ntfs3, exfat, vfat, fuseblk). Network filesystems (NFS, SMB, sshfs and other FUSE), virtual and memory filesystems, bind mounts of a filesystem that is already included, and btrfs `.snapshots` are skipped. On Linux 4.18+, unmounted nested btrfs subvolumes are scanned as part of their parent volume, while btrfs snapshots and subvolumes separately mounted elsewhere are still skipped. Set `paths` to scan exactly the directories you list instead; network filesystems are allowed when you list them. In automatic mode, `exclude` drops whole mount points. The shipped config excludes common container and Kubernetes runtime mounts (`/var/lib/containerd`, `/var/lib/docker`, `/var/lib/containers`, `/var/lib/etcd`, `/var/lib/kubelet`); edit or comment out `exclude` to scan them.
 
-### Configuration
+#### Configuration
 
 Edit `/etc/storage-analyzer/config`, then restart the service with `sudo systemctl restart storage-analyzer`. The format is `key = value`, one per line. Only whole-line `#` comments are allowed (no comments after a value), and unknown keys are errors. The file shipped in the package comes with default settings and commented examples.
 
@@ -136,7 +136,7 @@ Edit `/etc/storage-analyzer/config`, then restart the service with `sudo systemc
 | `exclude` | not set (shipped config sets `/var/lib/containerd, /var/lib/docker, /var/lib/containers, /var/lib/etcd, /var/lib/kubelet`) | Comma-separated mount points to leave out in auto mode; remove or comment out the line to exclude nothing |
 | `allow_delete` | `true` | Allow deleting files and folders from the web UI (`true` or `false`). Set `false` for read-only deployments. |
 
-### HTTPS and reverse proxy
+#### HTTPS and reverse proxy
 
 Without HTTPS, the sign-in page warns that the connection isn't encrypted. Either serve HTTPS directly by setting `tls_cert` and `tls_key`, or put the service behind a reverse proxy.
 
@@ -166,11 +166,11 @@ location / {
 }
 ```
 
-### Sign-in protection
+#### Sign-in protection
 
 After 5 failed sign-in attempts from one address within 15 minutes, that address is locked out for 15 minutes. Across all addresses, at most 20 password checks are made per minute. Failed attempts are logged as `login failed from <ip>`, which fail2ban can match. A session cookie lasts 30 days.
 
-### Ports below 1024, custom data directory, and stricter sandboxing
+#### Ports below 1024, custom data directory, and stricter sandboxing
 
 The service can't bind ports below 1024 by default. To use one, move `data_dir`, or further restrict write access at the kernel level, add a systemd override:
 
@@ -202,65 +202,87 @@ ProtectSystem=strict
 
 Then restart the service.
 
-### Uninstalling
+#### Uninstalling
 
 - Debian and Ubuntu: `sudo apt remove storage-analyzer` keeps the configuration and data; `sudo apt purge storage-analyzer` removes them too.
 - Fedora and RHEL: `sudo dnf remove storage-analyzer` keeps the data. Delete `/etc/storage-analyzer` and `/var/lib/storage-analyzer` by hand if you want them gone.
 - Tarball install: `sudo ./uninstall.sh`. Add `--purge` to also delete the configuration and data.
 
-### Known limitations
+#### Known limitations
 
 - There is no Docker image yet.
 - The packages only support systemd; other init systems aren't supported.
 
-## Usage
+### QNAP QTS
 
-### Scanning
+#### Requirements
 
-Click **New scan**. Progress is shown at the top of the window, and you can keep browsing older results while it runs. A scan usually takes a few minutes to tens of minutes, depending on how many files you have.
+- QTS 5.0 or later
+- One of these architectures:
+  - `x86_64`: Intel and AMD models
+  - `arm_64`: 64-bit ARM models
+  - `arm-x41`: 32-bit ARM models with an Annapurna Labs Alpine CPU, such as TS-x31P, TS-x31X and TS-x31K
+- A QTS administrator account. The app shows the names of every user's files, so only administrators can open it.
 
-Use the **Scan** picker to switch between saved scans. **History** lists every scan with its time, trigger, status, total size, file count and duration, and lets you open or delete one.
+> [!NOTE]
+> The ARM packages are built and tested under emulation but haven't been tried on a real ARM NAS yet. If you run one, feedback is welcome.
 
-### Browsing
+#### Installation
 
-The top level shows each data volume (on Linux, each scanned filesystem). Click a folder to open it, and use the breadcrumbs or **.. Up one level** to go back. Click a column header to sort by it.
+1. Download the `.qpkg` for your NAS's architecture from [Releases](https://github.com/FlintyLemming/storage-analyzer/releases/latest).
+2. The package isn't signed by QNAP, so allow unsigned apps first: in **App Center**, open **Settings** (gear icon) → **General** and turn on **Allow installation of applications without a valid digital signature**.
+3. In App Center, click **Install Manually** (the icon next to the gear), choose the downloaded file and confirm.
+4. Open **Storage Analyzer** from the QTS main menu.
 
-Hard links are counted only once (the other links are tagged), symbolic links aren't followed, and scans don't cross into other mounted file systems.
+To update, install the newer `.qpkg` the same way. Your scan history and settings are kept. All data lives in the app's install folder and is removed when the app is uninstalled.
 
-### Duplicates
+### fnOS (飞牛)
 
-Switch to **Duplicates** and click **Start duplicate check**. Groups of identical files and folders are listed largest first, with how much space removing the extra copies would free up. **↗ Show location** opens the folder in the Space view.
+#### Requirements
 
-- Folders count as identical when their file names, subfolder structure and file contents all match; the folders' own names may differ.
-- Empty files and hard links aren't reported as duplicates. Thumbnail and system files (`@__thumb`, `.@__thumb`, `@eaDir`, `.DS_Store`, `Thumbs.db`, `._*`) are ignored.
-- Files that changed after the scan are left out of the comparison.
-- Hashes are cached between checks. The first check reads every candidate file and can take a few hours; later checks only read new or changed files and usually take minutes to an hour.
+- fnOS `1.1.3100` or later (required for Unified Gateway)
+- One of these architectures:
+  - `x86`: x86_64 Intel and AMD devices
+  - `arm`: 64-bit ARM devices
+- A fnOS administrator account. The app shows every user's file names and is restricted to administrators via the fnOS Unified Gateway.
 
-### Deleting files
+> [!NOTE]
+> The `x86` package has been tested on a real x86_64 fnOS device; the `arm` package passes the test suite under emulation and hasn't been tried on real ARM hardware yet.
 
-When viewing the latest completed scan, you can delete individual items directly or check files and folders across different directories and the **Duplicates** view to collect them in the **Delete basket** at the bottom of the window, then review and permanently delete everything in one batch.
+#### Installation
 
-- Deletions are permanent (no recycle bin) and run in the background with live progress and a stop button, updating the scan totals and duplicate list automatically once finished.
-- In **Duplicates**, the UI prevents staging or deleting the last remaining copy of a group (use the Space view if you intentionally want to remove every copy).
-- Historical scans are read-only; volume roots, mount points, critical OS paths, and Storage Analyzer's own data/config directories cannot be deleted; Docker internal directories require an extra risk confirmation.
-- On Linux, set `allow_delete = false` in `/etc/storage-analyzer/config` to disable deletion completely.
+1. Download `storage-analyzer_<version>_fnos_<arch>.fpk` for your device from [Releases](https://github.com/FlintyLemming/storage-analyzer/releases/latest).
+2. In **App Center**, click **Manual Install** (手动安装), choose the `.fpk` file, pick the storage volume to install to, and confirm. Or install over SSH:
 
-### Settings
+   ```bash
+   sudo appcenter-cli install-fpk storage-analyzer_<version>_fnos_x86.fpk
+   ```
 
-- **Scheduled scan:** off, daily or weekly, at a time in the server's local time zone.
-- **Check for duplicates after the scan:** runs a duplicate check on each scheduled scan once it finishes.
-- **Keep results:** how many recent successful scans to keep (1–100). Each result takes tens to hundreds of MB.
-- **Default size:** whether to show *Disk usage* or *Apparent size* by default.
+3. Open **Storage Analyzer** from the fnOS desktop or App Center.
+
+No extra port or separate password is needed: it registers on the fnOS Unified Gateway (`/app/storage-analyzer/`) over a local Unix socket (`app.sock`), reusing your fnOS administrator session and working over HTTP, HTTPS, and fnConnect.
+
+#### Configuration and updates
+
+By default only fnOS storage spaces (`/vol1`, `/vol2`, …) are scanned, skipping `/`, `/boot/efi`, virtual filesystems and remote mounts. To also scan the system partition `/` or external storage, or to disable web file deletion for read-only mode, open **App Center → Storage Analyzer → Settings**; saving automatically restarts the service.
+
+Scan databases and logs live in the app's `@appdata` directory (`TRIM_PKGVAR`). To update, install the newer `.fpk`; scan history and settings are preserved.
 
 ## Building from source
 
-You need Go 1.26 or later and Docker. QNAP packaging uses QNAP's [QDK](https://github.com/qnap-dev/QDK), which runs in a container.
+You need Go 1.26 or later. Docker is required for Linux `.deb`/`.rpm` packaging (`nfpm`), QNAP packaging ([QDK](https://github.com/qnap-dev/QDK)), and multi-architecture Linux tests.
 
 ```bash
-./scripts/build.sh
-```
+# Linux packages: build/linux/storage-analyzer_<version>_{tar.gz,deb,rpm}
+./scripts/build-linux.sh
 
-This runs the tests (including the Linux tests for every architecture, in Docker), cross-compiles the binary and writes `build/StorageAnalyzer_<version>_<arch>.qpkg` for `x86_64`, `arm_64` and `arm-x41`. For the Linux packages (`.tar.gz`, `.deb` and `.rpm`), run `./scripts/build-linux.sh`. For the fnOS packages (`build/fnos/storage-analyzer_<version>_fnos_{x86,arm}.fpk`), run `./scripts/build-fnos.sh` (it uses `fnpack` from `PATH` or downloads it automatically; set `FNPACK_KEY` and `FNPACK_CERT` to sign with a fnOS developer certificate).
+# QNAP packages: build/StorageAnalyzer_<version>_{x86_64,arm_64,arm-x41}.qpkg
+./scripts/build.sh
+
+# fnOS packages: build/fnos/storage-analyzer_<version>_fnos_{x86,arm}.fpk
+# (uses fnpack from PATH or downloads it automatically; builds unsigned with --nosign by default)
+./scripts/build-fnos.sh
+```
 
 To work on the UI locally, build a native binary, write a dev config file pointing at the folder you want to scan, and start the development server (it skips authentication and only listens on loopback):
 
@@ -275,7 +297,11 @@ Then open <http://127.0.0.1:8099/>.
 
 ## How it works
 
-A single static Go binary serves everything. On QNAP there's no resident process: it runs as a CGI program behind QTS's own web server, using the QTS administrator session, and is launched in the background when a scan or duplicate check starts; scheduled scans are a line in the QTS crontab. On fnOS it runs as a resident service listening only on the Unified Gateway Unix socket (`app.sock`), reusing the fnOS administrator session, with an in-process scheduler and child processes for scans, duplicate checks, and deletions; all data lives in the app's `@appdata` directory. On Linux it runs as a resident systemd service with its own sign-in, and starts scans and duplicate checks as child processes. Each scan is saved as its own SQLite database, so opening an old scan is as fast as opening the latest. On QNAP, all data lives in the app's install folder and is removed when the app is uninstalled.
+A single static Go binary serves everything, compiled per platform with Go build tags so each package only includes the code it needs. Each scan is saved as its own SQLite database, so opening an old scan is as fast as opening the latest.
+
+- **Linux:** Runs as a resident systemd service with embedded frontend assets, built-in password authentication, an in-process scheduler, and child processes for scans, duplicate checks, and deletions.
+- **QNAP QTS:** Has no resident process. Runs as a CGI program behind QTS's web server using the QTS administrator session, launches background processes on demand, and registers scheduled scans in the QTS crontab.
+- **fnOS:** Runs as a resident service listening only on the Unified Gateway Unix socket (`app.sock`), reusing the fnOS administrator session, with embedded frontend assets, an in-process scheduler, and child processes for scans, duplicate checks, and deletions.
 
 ## License
 
